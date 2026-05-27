@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Configuration de sécurité réseau Android.
+
+    Autorise le trafic HTTP en clair UNIQUEMENT vers localhost (127.0.0.1).
+    Tout autre trafic reste chiffré (HTTPS obligatoire).
+
+    À référencer dans AndroidManifest.xml :
+        <application android:networkSecurityConfig="@xml/network_security_config" ...>
+
+    Chemin : android/app/src/main/res/xml/network_security_config.xml
+-->
+<network-security-config>
+
+    <!-- Trafic vers les APIs externes — HTTPS uniquement, pas d'exception -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Exception ciblée : proxy audio local Dart (AudioProxyServer) -->
+    <!-- ExoPlayer se connecte à http://127.0.0.1:PORT/stream           -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+
+</network-security-config>

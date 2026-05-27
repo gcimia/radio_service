@@ -1,0 +1,70 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Accès réseau -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Foreground service — API 9+, requis pour la lecture en arrière-plan -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- POST_NOTIFICATIONS — Android 13+ (API 33+) uniquement.
+         Ignorée silencieusement sur API 24-32. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- FOREGROUND_SERVICE_MEDIA_PLAYBACK est déclaré dans le manifest du plugin
+         radio_service et sera mergé automatiquement par Gradle Manifest Merger.
+         Ne pas le redéclarer ici pour éviter les conflits. -->
+
+    <application
+        android:label="radio_service_example"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+        <!-- RadioMediaService — déclaré ici pour être visible par l'app.
+             Le plugin le déclare aussi, Gradle Manifest Merger les fusionne.
+             tools:targetApi="29" indique que foregroundServiceType est intentionnel
+             pour API 29+ : Android ignore cet attribut sur API 24-28 (no crash),
+             et l'utilise sur API 29+ pour le type de service audio. -->
+        <service
+            android:name="com.dev.gcimia.radio_service.RadioMediaService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback"
+            tools:targetApi="29">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
+    </application>
+
+    <!-- Requis par Flutter pour le plugin ProcessText -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT" />
+            <data android:mimeType="text/plain" />
+        </intent>
+    </queries>
+
+</manifest>

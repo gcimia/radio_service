@@ -1,0 +1,51 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+# Libraries should not include pubspec.lock, per https://dart.dev/guides/libraries/private-files#pubspeclock.
+/pubspec.lock
+# Et le pubspec.lock de l'app de démo aussi (convention plugins Flutter)
+example/pubspec.lock
+**/doc/api/
+.dart_tool/
+.flutter-plugins-dependencies
+/build/
+/coverage/
+
+# Android local config (chemins SDK spécifiques à la machine — NE PAS committer)
+**/android/local.properties
+**/android/.gradle/
+.gradle/
+.flutter-plugins
+
+# Registres de plugins auto-générés par Flutter (régénérés par flutter pub get)
+# Convention standard des plugins Flutter (cf. just_audio, audio_service, etc.)
+**/generated_plugin_registrant.cc
+**/generated_plugin_registrant.h
+**/generated_plugin_registrant.dart
+**/generated_plugins.cmake
+**/GeneratedPluginRegistrant.swift
+**/GeneratedPluginRegistrant.h
+**/GeneratedPluginRegistrant.m

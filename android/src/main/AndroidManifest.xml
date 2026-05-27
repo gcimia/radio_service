@@ -1,0 +1,42 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.dev.gcimia.radio_service">
+
+    <!-- Accès réseau -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Foreground service — requis API 9+, indispensable pour la lecture en arrière-plan -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Foreground service type "mediaPlayback" — requis depuis API 29 (Android 10).
+         Sur API 24-28, cette permission est inconnue mais installée sans erreur.
+         tools:ignore="ProtectedPermissions" supprime l'avertissement lint. -->
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Notifications runtime — requis depuis API 33 (Android 13).
+         Ignorée silencieusement sur API < 33. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:networkSecurityConfig="@xml/network_security_config">
+
+        <!-- MediaSessionService — maintient la lecture en arrière-plan.
+             android:foregroundServiceType="mediaPlayback" :
+               - Requis depuis API 29 pour startForeground() sur les services audio.
+               - Sur API 24-28 : attribut ignoré par Android, le service fonctionne normalement.
+             android:exported="true" : requis pour que le système puisse lier la session
+               (écran de verrouillage, Bluetooth, Android Auto). -->
+        <service
+            android:name=".RadioMediaService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
+    </application>
+
+</manifest>
