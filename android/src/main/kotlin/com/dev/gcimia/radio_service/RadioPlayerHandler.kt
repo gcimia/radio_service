@@ -12,6 +12,7 @@ class RadioPlayerHandler(                                            // ← OUVE
     context: Context,
     eventStream: PlayerEventStream,
     private val onConfigure: (backgroundEnabled: Boolean) -> Unit = {},
+    private val onRelease:   () -> Unit                          = {},
 ) : MethodChannel.MethodCallHandler {
 
     private val player = RadioExoPlayer(context, eventStream)
@@ -30,7 +31,8 @@ class RadioPlayerHandler(                                            // ← OUVE
             "configure" -> {
                 val equalizerEnabled  = call.argument<Boolean>("equalizerEnabled")  ?: true
                 val backgroundEnabled = call.argument<Boolean>("backgroundEnabled") ?: true
-                player.configure(equalizerEnabled = equalizerEnabled)
+                val autoResume        = call.argument<Boolean>("autoResumeAfterFocusLoss") ?: true
+                player.configure(equalizerEnabled = equalizerEnabled, autoResume = autoResume)
                 onConfigure(backgroundEnabled)
                 result.success(null)
             }
@@ -53,6 +55,15 @@ class RadioPlayerHandler(                                            // ← OUVE
             "play"       -> player.play(result)
             "pause"      -> player.pause(result)
             "stop"       -> player.stop(result)
+
+            // Libération globale : arrête le foreground service (→ libère
+            // player + MediaSession + notification via onDestroy) puis libère
+            // les ressources du player. Appelé par RadioService.dispose().
+            "release"    -> {
+                onRelease()
+                player.release()
+                result.success(null)
+            }
 
             // Ajuste le volume entre 0.0 et 1.0
             "setVolume"  -> {
@@ -100,6 +111,9 @@ class RadioPlayerHandler(                                            // ← OUVE
         }
     }                                                                // ← FERMETURE onMethodCall
 
-    fun dispose() = player.release()
+    fun dispose() {
+        onRelease()        // stoppe le foreground service (notification incluse)
+        player.release()
+    }
 
 }                                                                    // ← FERMETURE CLASSE

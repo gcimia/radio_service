@@ -23,7 +23,7 @@ Built for Android (iOS support planned). Handles ICY streams, SHOUTcast, AAC, MP
 
 ```yaml
 dependencies:
-  radio_service: ^0.1.0
+  radio_service: ^0.0.2
 ```
 
 ---
@@ -114,6 +114,10 @@ RadioService(
 
   // Background playback + system notification
   backgroundEnabled: true,  // default: true
+
+  // Resume playback automatically after an audio interruption
+  // (phone call, other media app). Set false for manual resume.
+  autoResumeAfterFocusLoss: true,  // default: true
 )
 ```
 
@@ -198,6 +202,19 @@ service.player.seekToLive();
 
 ---
 
+## Audio Focus (Android)
+
+The plugin manages audio focus automatically:
+
+- **Phone call / other media app** → playback pauses, then resumes when the
+  interruption ends (if `autoResumeAfterFocusLoss` is `true`).
+- **Short interruption** (notification sound, GPS guidance) → volume is
+  lowered (ducking), then restored.
+- With `autoResumeAfterFocusLoss: false`, playback stays paused after an
+  interruption and the user resumes manually.
+
+---
+
 ## Metadata & States
 
 ### PlayerState
@@ -214,6 +231,11 @@ service.stateStream.listen((state) {
   }
 });
 ```
+
+`PlayerError` is emitted when the stream is unavailable: connection refused,
+HTTP error, DNS failure, playback error — or when no audio data arrives within
+15 seconds of connecting (unreachable station watchdog). The UI should handle
+this state to stop any loading indicator and inform the user.
 
 ### PlayerMetadata
 
@@ -237,7 +259,7 @@ service.metadataStream.listen((m) {
 | MP3    | ✅ | SHOUTcast / Icecast |
 | AAC    | ✅ | `.aac`, `.aacp` |
 | OGG    | ✅ | Vorbis |
-| HLS    | 🔜 | Planned |
+| HLS    | ➖ | Supported via `isHls: true` (no inline ICY metadata; use REST polling) |
 
 ### Playlist formats
 
@@ -247,6 +269,21 @@ service.metadataStream.listen((m) {
 | `.m3u` | ✅ |
 | RadioKing (`listen.radioking.com`) | ✅ |
 | RadioEndirect (`radioendirect.net`) | ✅ |
+
+---
+
+## Lifecycle
+
+Call `dispose()` when the player is no longer needed (e.g. when the user
+quits the app). It stops the stream, stops the Android foreground service and
+releases the player, the media session and the notification:
+
+```dart
+await service.dispose();
+```
+
+Swiping the app away from the recent apps screen also stops playback and
+releases all native resources.
 
 ---
 

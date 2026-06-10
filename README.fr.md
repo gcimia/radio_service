@@ -23,7 +23,7 @@ Développé pour Android (iOS prévu). Gère les flux ICY, SHOUTcast, AAC, MP3 e
 
 ```yaml
 dependencies:
-  radio_service: ^0.1.0
+  radio_service: ^0.0.2
 ```
 
 ---
@@ -114,6 +114,10 @@ RadioService(
 
   // Lecture en arrière-plan + notification système
   backgroundEnabled: true,  // défaut: true
+
+  // Reprise automatique de la lecture après une interruption audio
+  // (appel téléphonique, autre appli média). false = reprise manuelle.
+  autoResumeAfterFocusLoss: true,  // défaut: true
 )
 ```
 
@@ -199,6 +203,20 @@ service.player.seekToLive();
 
 ---
 
+## Focus audio (Android)
+
+Le plugin gère automatiquement le focus audio :
+
+- **Appel téléphonique / autre appli média** → la lecture se met en pause,
+  puis reprend à la fin de l'interruption (si `autoResumeAfterFocusLoss`
+  est `true`).
+- **Interruption courte** (son de notification, guidage GPS) → le volume est
+  baissé (ducking), puis restauré.
+- Avec `autoResumeAfterFocusLoss: false`, la lecture reste en pause après une
+  interruption et l'utilisateur reprend manuellement.
+
+---
+
 ## États et métadonnées
 
 ### PlayerState
@@ -215,6 +233,12 @@ service.stateStream.listen((state) {
   }
 });
 ```
+
+`PlayerError` est émis quand le flux est indisponible : connexion refusée,
+erreur HTTP, échec DNS, erreur de lecture — ou quand aucune donnée audio
+n'arrive dans les 15 secondes suivant la connexion (garde-fou station
+injoignable). L'UI doit gérer cet état pour arrêter le loader et informer
+l'utilisateur.
 
 ### PlayerMetadata
 
@@ -238,7 +262,7 @@ service.metadataStream.listen((m) {
 | MP3    | ✅ | SHOUTcast / Icecast |
 | AAC    | ✅ | `.aac`, `.aacp` |
 | OGG    | ✅ | Vorbis |
-| HLS    | 🔜 | Prévu |
+| HLS    | ➖ | Supporté via `isHls: true` (pas de métadonnées ICY inline ; utiliser le polling REST) |
 
 ### Playlists
 
@@ -248,6 +272,21 @@ service.metadataStream.listen((m) {
 | `.m3u` | ✅ |
 | RadioKing (`listen.radioking.com`) | ✅ |
 | RadioEndirect (`radioendirect.net`) | ✅ |
+
+---
+
+## Cycle de vie
+
+Appelez `dispose()` quand le lecteur n'est plus nécessaire (par exemple quand
+l'utilisateur quitte l'application). Cela arrête le flux, stoppe le foreground
+service Android et libère le player, la media session et la notification :
+
+```dart
+await service.dispose();
+```
+
+Balayer l'application depuis l'écran des applis récentes arrête également la
+lecture et libère toutes les ressources natives.
 
 ---
 

@@ -54,10 +54,33 @@ class RadioExoPlayer(                                                // ← OUVE
     // Mémorisé pour que onTracksChanged sache s'il faut affiner la détection
     private var currentIsHls = false
 
+    // Vrai entre une erreur de lecture et le prochain setUrl. Sert à ne pas
+    // émettre le STATE_IDLE automatique qu'ExoPlayer génère juste après une
+    // erreur — sinon cet "idle" écrase le message d'erreur côté UI (« Arrêté »
+    // au lieu de « Erreur »).
+    private var inErrorState = false
+
+    // Évite une double libération (le service ET le handler peuvent appeler release()).
+    private var released = false
+
     private var exoPlayer: ExoPlayer = buildPlayer(
         context.applicationContext,
         maxBufferMs = 30 * 60 * 1000,
         minBufferMs = 5_000,
+    )
+
+    // Volume « voulu » par l'app (hors ducking). Sert à restaurer après un duck.
+    private var currentVolume = 1.0f
+
+    // Gestion manuelle du focus audio (ExoPlayer construit avec
+    // handleAudioFocus=false). Permet la pause sur audio entrant + le choix
+    // reprise auto / manuelle.
+    private val focusManager = RadioAudioFocusManager(
+        context.applicationContext,
+        onPause  = { exoPlayer.pause() },
+        onResume = { exoPlayer.play() },
+        onDuck   = { exoPlayer.volume = currentVolume * 0.2f },
+        onUnduck = { exoPlayer.volume = currentVolume },
     )
 
     init {                                                           // ← OUVERTURE init
@@ -77,7 +100,12 @@ class RadioExoPlayer(                                                // ← OUVE
                     Player.STATE_ENDED     -> "stopped"
                     else                   -> "idle"
                 }
-                eventStream.sendState(mapped)
+                // Après une erreur, ExoPlayer repasse en STATE_IDLE : on n'émet
+                // pas cet "idle" automatique, sinon il écrase le PlayerError
+                // affiché par l'UI. L'état reste « Erreur » jusqu'au prochain setUrl.
+                if (!(state == Player.STATE_IDLE && inErrorState)) {
+                    eventStream.sendState(mapped)
+                }
 
                 if (state == Player.STATE_READY && radioEqualizer == null) {
                     if (equalizerEnabled) {
@@ -100,7 +128,8 @@ class RadioExoPlayer(                                                // ← OUVE
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                eventStream.sendError(error.message ?: "Unknown playback error")
+                inErrorState = true
+                eventStream.sendErrorState(error.message ?: "Unknown playback error")
             }
 
             // Métadonnées — actif pour les flux HLS uniquement.
@@ -144,8 +173,9 @@ class RadioExoPlayer(                                                // ← OUVE
 
     /// Appelée une seule fois depuis RadioPlayerHandler après l'initialisation.
     /// Permet d'activer/désactiver les fonctionnalités optionnelles.
-    fun configure(equalizerEnabled: Boolean) {               // ← OUVERTURE configure
+    fun configure(equalizerEnabled: Boolean, autoResume: Boolean = true) { // ← OUVERTURE configure
         this.equalizerEnabled = equalizerEnabled
+        focusManager.autoResume = autoResume
         if (!equalizerEnabled) {
             radioEqualizer?.release()
             radioEqualizer   = null
@@ -163,6 +193,10 @@ class RadioExoPlayer(                                                // ← OUVE
         isHls:       Boolean,
         result:      MethodChannel.Result,
     ) {
+        // Nouveau flux → on lève le verrou d'erreur (les états idle/buffering
+        // redeviennent significatifs).
+        inErrorState = false
+
         stopPositionUpdates()
 
         radioEqualizer?.release()
@@ -221,22 +255,30 @@ class RadioExoPlayer(                                                // ← OUVE
     }                                                                // ← FERMETURE setUrl
 
     fun play(result: MethodChannel.Result) {                         // ← OUVERTURE play
+        // Demande le focus audio (enregistre aussi le listener pour réagir
+        // aux interruptions). On lance la lecture même si refusé (intention
+        // utilisateur explicite) — le refus reste rarissime.
+        focusManager.request()
         exoPlayer.play()
         result.success(null)
     }                                                                // ← FERMETURE play
 
     fun pause(result: MethodChannel.Result) {                        // ← OUVERTURE pause
+        // Pause demandée par l'utilisateur → on relâche le focus.
         exoPlayer.pause()
+        focusManager.abandon()
         result.success(null)
     }                                                                // ← FERMETURE pause
 
     fun stop(result: MethodChannel.Result) {                         // ← OUVERTURE stop
         stopPositionUpdates()
         exoPlayer.stop()
+        focusManager.abandon()
         result.success(null)
     }                                                                // ← FERMETURE stop
 
     fun setVolume(volume: Float, result: MethodChannel.Result) {     // ← OUVERTURE setVolume
+        currentVolume    = volume
         exoPlayer.volume = volume
         result.success(null)
     }                                                                // ← FERMETURE setVolume
@@ -318,8 +360,13 @@ class RadioExoPlayer(                                                // ← OUVE
     fun getExoPlayer(): ExoPlayer = exoPlayer
 
     fun release() {                                                  // ← OUVERTURE release
+        if (released) return
+        released = true
         stopPositionUpdates()
+        focusManager.abandon()
         radioEqualizer?.release()
+        radioEqualizer   = null
+        pendingEqualizer = null
         exoPlayer.release()
     }                                                                // ← FERMETURE release
 
@@ -373,16 +420,15 @@ class RadioExoPlayer(                                                // ← OUVE
         return ExoPlayer.Builder(context)
             .setLoadControl(loadControl)
             // ── Session audio ──────────────────────────────────────────────
-            // Audio focus — Media3 gère automatiquement :
-            //   - Pause lors d'un appel téléphonique entrant
-            //   - Reprise après l'appel si la lecture était en cours
-            //   - Ducking (baisse du volume) quand une autre appli joue
+            // Focus audio géré MANUELLEMENT par RadioAudioFocusManager
+            // (handleAudioFocus=false) afin d'offrir le choix reprise
+            // auto / manuelle après une interruption.
             .setAudioAttributes(
                 androidx.media3.common.AudioAttributes.Builder()
                     .setUsage(androidx.media3.common.C.USAGE_MEDIA)
                     .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
                     .build(),
-                /* handleAudioFocus = */ true,
+                /* handleAudioFocus = */ false,
             )
             // Becoming noisy — pause automatique quand :
             //   - le casque filaire est débranché

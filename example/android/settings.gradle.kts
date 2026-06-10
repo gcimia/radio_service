@@ -19,8 +19,10 @@ pluginManagement {
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    id("com.android.application") version "9.2.1" apply false
-    id("org.jetbrains.kotlin.android") version "2.3.21" apply false
+    // Aligné sur le trio testé par Flutter 3.44.1 (cf. gradle_utils.dart) :
+    // AGP 9.0.1 (full Kotlin support), Kotlin 2.3.20, Gradle 9.1.0 (wrapper).
+    id("com.android.application") version "9.0.1" apply false
+    id("org.jetbrains.kotlin.android") version "2.3.20" apply false
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 

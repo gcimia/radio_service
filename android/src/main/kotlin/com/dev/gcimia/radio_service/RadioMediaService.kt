@@ -89,10 +89,12 @@ class RadioMediaService : MediaSessionService() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        val player = mediaSession?.player
-        if (player == null || !player.playWhenReady) {
-            stopSelf()
-        }
+        // Balayage depuis les récents = fermeture explicite de l'appli.
+        // On arrête la lecture et on libère le service (→ onDestroy).
+        // (Le bouton Home, lui, ne déclenche PAS onTaskRemoved : la lecture
+        //  continue normalement en arrière-plan.)
+        mediaSession?.player?.stop()
+        stopSelf()
     }
 
     override fun onDestroy() {

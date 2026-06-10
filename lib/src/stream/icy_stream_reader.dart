@@ -144,6 +144,10 @@ class IcyStreamReader {
   /// Lecture arrêtée.
   void Function()? onDisconnected;
 
+  /// Toutes les tentatives de (re)connexion ont échoué — flux durablement
+  /// indisponible. Distinct de [onError] (transitoire, on retente encore).
+  void Function()? onUnavailable;
+
   // ── API publique ──────────────────────────────────────────────────────────
 
   Future<void> start(String url) async {
@@ -218,6 +222,10 @@ class IcyStreamReader {
         // ── FIN DEBUG ──────────────────────────────────────────────────────
         await Future.delayed(reconnectDelay);
         _connect(reconnectCount: reconnectCount + 1);
+      } else if (_running) {
+        // Plus de tentatives — flux durablement indisponible.
+        debugPrint('[IcyStreamReader] indisponible — $maxReconnects tentatives épuisées');
+        onUnavailable?.call();
       }
     }
   }

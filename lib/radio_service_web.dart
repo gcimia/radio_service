@@ -7,10 +7,6 @@ import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:web/web.dart' as web;
 
 import 'radio_service_platform_interface.dart';
-import 'src/buffer/buffer_config.dart';
-import 'src/equalizer/equalizer_config.dart';
-import 'src/player/player_position.dart';
-import 'src/player/player_state.dart';
 
 // Implémentation Web du plugin radio_service.
 //
@@ -33,7 +29,6 @@ class RadioServiceWeb extends RadioServicePlatform {
   // ── État interne ───────────────────────────────────────────────────────────
 
   web.HTMLAudioElement? _audio;
-  String? _stationName;
   Timer?  _positionTimer;
 
   final _stateController    = StreamController<PlayerState>.broadcast();
@@ -46,8 +41,19 @@ class RadioServiceWeb extends RadioServicePlatform {
   Future<void> configure({
     bool equalizerEnabled  = true,
     bool backgroundEnabled = true,
+    // Sans effet sur web : le navigateur gère lui-même les interruptions
+    // audio (il n'y a ni téléphonie ni focus audio système comme sur Android).
+    bool autoResumeAfterFocusLoss = true,
   }) async {
     _setupMediaSession();
+  }
+
+  @override
+  Future<void> release() async {
+    _disposeAudio();
+    await _stateController.close();
+    await _metadataController.close();
+    await _positionController.close();
   }
 
   @override
@@ -57,7 +63,6 @@ class RadioServiceWeb extends RadioServicePlatform {
     String?      stationName,
     bool         isHls        = false,
   }) async {
-    _stationName = stationName;
     _disposeAudio();
 
     final audio = web.HTMLAudioElement();
@@ -147,7 +152,10 @@ class RadioServiceWeb extends RadioServicePlatform {
   @override
   Stream<PlayerState>    get stateStream    => _stateController.stream;
 
-  @override
+  /// Métadonnées émises côté web (nom de station passé à setUrl).
+  /// NB : pas un membre de RadioServicePlatform — dans la nouvelle
+  /// architecture les métadonnées sont gérées par RadioService (couche Dart),
+  /// ce stream est donc propre à l'implémentation web.
   Stream<PlayerMetadata> get metadataStream => _metadataController.stream;
 
   @override

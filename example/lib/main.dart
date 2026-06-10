@@ -31,17 +31,17 @@ class _RadioTestPageState extends State<RadioTestPage> {
   );
 
   // Radio Sofaia — flux MP3 + endpoint REST public avec artwork
-  static const _streamUrl0 = "https://radiosofaia.ice.infomaniak.ch/radiosofaia-high.aac"
-  ;
+  static const _streamUrl0 = "https://radiosofaia.ice.infomaniak.ch/radiosofaia-high.aac";
+  // Rtl réunion
   static const _streamUrl01   = 'https://rtlre.ice.infomaniak.ch/rtlre-64.aac';
 
 
 
   // Antilles Média — flux ICY sans REST
   static const _streamUrl1 = 'https://antillesmedia.pro-fhi.net:1165/stream'; // Live
-  static const _streamUrl2 = "https://antillesmedia.pro-fhi.net:1065/stream"; // Kompa
-  static const _streamUrl3 = 'https://antillesmedia.pro-fhi.net:1045/stream'; // Zouk
-  static const _streamUrl4 = "https://antillesmedia.pro-fhi.net:1135/stream"; // Latine
+  static const _streamUrl2 = "https://antillesmedia.pro-fhi.net/antillesmediakompa"; // Kompa
+  static const _streamUrl3 = 'https://antillesmedia.pro-fhi.net/antillesmediazouk'; // Zouk
+  static const _streamUrl4 = "https://antillesmedia.pro-fhi.net:1115/stream"; // Latine
 
   // Bel Radio Gpe
   static const _streamUrl5 = 'https://stream.rcs.revma.com/a7qacprtpwzuv';
@@ -55,6 +55,10 @@ class _RadioTestPageState extends State<RadioTestPage> {
   static const _streamUrl9 = "https://listen.radioking.com/radio/378136/stream/429373";
   // GUADELOUPE 1ERE
   static const _streamUrl10 = "https://guadeloupe.ice.infomaniak.ch/guadeloupe-128.mp3";
+  // RADIO ROSSIGNOL  https://radio3.pro-fhi.net:19004/;stream
+  static const _streamUrl11 = "https://radio3.pro-fhi.net:19004/stream";
+  // https://stunnel2.cyber-streaming.com:9222/1
+  static const _streamUrl12 = "https://stunnel2.cyber-streaming.com:9222/1";
 
   // ── Flux HLS pour test ────────────────────────────────────────────────────
   // Flux vidéo Antilles Média TV — audio HLS (pas de métadonnées musicales)
@@ -168,9 +172,10 @@ class _RadioTestPageState extends State<RadioTestPage> {
       // Stream silencieux — le flux est connecté mais la radio ne diffuse rien.
       // Affiché après 45s sans StreamTitle ICY alors que le proxy reçoit des bytes.
       if (m.isSilent) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(
-            '\${m.stationName ?? "La radio"} ne diffuse pas en ce moment',
+            '${m.stationName ?? "La radio"} ne diffuse pas en ce moment',
           ),
           duration: const Duration(seconds: 6),
           backgroundColor: Colors.orange.shade700,

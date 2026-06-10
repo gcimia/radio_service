@@ -45,7 +45,7 @@ class RadioServicePlugin : FlutterPlugin, ActivityAware {
         RadioNotificationManager(appContext)
 
         val eventStream = PlayerEventStream()
-        handler = RadioPlayerHandler(appContext, eventStream, ::onConfigure)
+        handler = RadioPlayerHandler(appContext, eventStream, ::onConfigure, ::stopRadioService)
 
         methodChannel = MethodChannel(binding.binaryMessenger, "radio_service")
         methodChannel.setMethodCallHandler(handler)
@@ -129,6 +129,16 @@ class RadioServicePlugin : FlutterPlugin, ActivityAware {
             //   API 21-25 → startService() (startForegroundService n'existe pas encore)
             // Évite le crash NoSuchMethodError sur Android 7.0 (API 24-25)
             ContextCompat.startForegroundService(appContext, intent)
+        } else {
+            // Fonctionnalité désactivée → on libère la ressource associée.
+            stopRadioService()
         }
+    }
+
+    /// Arrête le foreground service (et donc libère player + MediaSession +
+    /// notification via RadioMediaService.onDestroy). Idempotent : sans effet
+    /// si le service n'est pas démarré.
+    private fun stopRadioService() {
+        appContext.stopService(Intent(appContext, RadioMediaService::class.java))
     }
 }

@@ -100,12 +100,33 @@ class RadioService {
 
   final _metadataController = StreamController<PlayerMetadata>.broadcast();
 
+  // ── Flux d'état unifié ──────────────────────────────────────────────────────
+  // Fusionne les états natifs (ExoPlayer via le canal d'événements) et les
+  // erreurs détectées côté Dart (indisponibilité réseau, watchdog premier octet).
+  // L'app n'écoute que ce flux — elle reçoit donc aussi bien un PlayerError
+  // venant d'ExoPlayer qu'un PlayerError « radio indisponible » côté Dart.
+  final _stateController = StreamController<PlayerState>.broadcast();
+  StreamSubscription<PlayerState>? _nativeStateSub;
+
+  // Watchdog « premier octet audio » — si aucun octet audio n'arrive après le
+  // démarrage d'un flux ICY (serveur muet, lent, refus…), le flux est déclaré
+  // indisponible au lieu de laisser le loader tourner à l'infini.
+  static const _firstBytesTimeout = Duration(seconds: 15);
+  Timer? _firstBytesTimer;
+
+  // Évite d'émettre/traiter l'indisponibilité deux fois (watchdog + onUnavailable).
+  bool _reportedUnavailable = false;
+
+  // Empêche une double libération (dispose appelé plusieurs fois).
+  bool _disposed = false;
+
   // ── Constructeur ───────────────────────────────────────────────────────────
 
   RadioService({
     ArtworkResolverConfig artworkConfig     = const ArtworkResolverConfig(),
     bool                  equalizerEnabled  = true,
     bool                  backgroundEnabled = true,
+    bool                  autoResumeAfterFocusLoss = true,
   })  : player       = PlayerController(),
         equalizer    = EqualizerService(),
         notification = NotificationService(),
@@ -118,6 +139,15 @@ class RadioService {
     RadioServicePlatform.instance.configure(
       equalizerEnabled:  equalizerEnabled,
       backgroundEnabled: backgroundEnabled,
+      autoResumeAfterFocusLoss: autoResumeAfterFocusLoss,
+    );
+
+    // Redirige les états natifs (ExoPlayer) vers le flux unifié.
+    _nativeStateSub = player.stateStream.listen(
+      _stateController.add,
+      onError: (Object e) {
+        if (!_stateController.isClosed) _stateController.add(PlayerError(e.toString()));
+      },
     );
   }
 
@@ -146,6 +176,7 @@ class RadioService {
     _stationName      = null;
     _stationLogoUrl       = null;
     _lastMusicArtworkData = null;
+    _reportedUnavailable  = false;
     _metadataParser.reset();
 
     // Effacement du cache artwork à chaque changement de radio
@@ -240,6 +271,11 @@ class RadioService {
       };
 
       _icyReader!.onAudioBytes = (bytes) {
+        // Premier octet audio reçu → le flux répond, on désarme le watchdog.
+        if (_firstBytesTimer != null) {
+          _firstBytesTimer!.cancel();
+          _firstBytesTimer = null;
+        }
         _proxy?.pushAudioBytes(bytes);
         _proxyReceivingBytes = true;
         // Réarme le timer : un morceau long n'émet pas de StreamTitle pendant des minutes
@@ -250,6 +286,12 @@ class RadioService {
         // ── DEBUG ──────────────────────────────────────────────────────────
         debugPrint('[RadioService] erreur flux: $error');
         // ── FIN DEBUG ──────────────────────────────────────────────────────
+        // Erreur transitoire : IcyStreamReader retente encore. On ne signale
+        // l'indisponibilité qu'à l'épuisement (onUnavailable) ou via le watchdog.
+      };
+
+      _icyReader!.onUnavailable = () {
+        _reportUnavailable('Radio indisponible');
       };
 
       _icyReader!.onConnected = () {
@@ -262,6 +304,16 @@ class RadioService {
 
       // Démarre la connexion au flux — non-bloquant
       _icyReader!.start(resolved.url);
+
+      // Watchdog : si aucun octet audio n'arrive dans le délai imparti,
+      // le flux est indisponible → on émet PlayerError au lieu de laisser
+      // l'UI sur un loader infini. Désarmé au premier octet (onAudioBytes).
+      _firstBytesTimer?.cancel();
+      _firstBytesTimer = Timer(_firstBytesTimeout, () {
+        if (!_proxyReceivingBytes) {
+          _reportUnavailable('Radio indisponible (aucune donnée audio)');
+        }
+      });
 
       // ── Donne l'URL proxy à ExoPlayer ──────────────────────────────────────
       await RadioServicePlatform.instance.setUrl(
@@ -291,7 +343,7 @@ class RadioService {
 
   // ── Streams unifiés ────────────────────────────────────────────────────────
 
-  Stream<PlayerState>    get stateStream    => player.stateStream;
+  Stream<PlayerState>    get stateStream    => _stateController.stream;
   Stream<PlayerMetadata> get metadataStream => _metadataController.stream;
   Stream<PlayerPosition> get positionStream => player.positionStream;
 
@@ -488,11 +540,35 @@ class RadioService {
     ));
   }
 
+  // ── Indisponibilité ─────────────────────────────────────────────────────────
+
+  /// Signale à l'UI que le flux est durablement indisponible et coupe la
+  /// couche réseau Dart. Idempotent : déclenché soit par le watchdog
+  /// (premier octet), soit par IcyStreamReader.onUnavailable.
+  /// (Le nettoyage complet des ressources natives sera traité au groupe D.)
+  void _reportUnavailable(String message) {
+    if (_reportedUnavailable) return;
+    _reportedUnavailable = true;
+
+    _firstBytesTimer?.cancel();
+    _firstBytesTimer = null;
+
+    if (!_stateController.isClosed) {
+      _stateController.add(PlayerError(message));
+    }
+
+    // Coupe le reader + le proxy pour ne plus consommer le réseau inutilement.
+    // Fire-and-forget : on n'attend pas la fin de l'arrêt asynchrone.
+    _stopStream();
+  }
+
   // ── Arrêt du flux ──────────────────────────────────────────────────────────
 
   Future<void> _stopStream() async {
-    // Arrêt du timer de silence avant toute chose
+    // Arrêt des timers avant toute chose
     _stopSilenceTimer();
+    _firstBytesTimer?.cancel();
+    _firstBytesTimer = null;
     _proxyReceivingBytes = false;
     _poller?.stop();
     _poller = null;
@@ -505,7 +581,14 @@ class RadioService {
   // ── Nettoyage ──────────────────────────────────────────────────────────────
 
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     await _stopStream();
-    _metadataController.close();
+    await _nativeStateSub?.cancel();
+    _nativeStateSub = null;
+    // Libère les ressources natives (player, MediaSession, service, notification).
+    await RadioServicePlatform.instance.release();
+    await _metadataController.close();
+    await _stateController.close();
   }
 }

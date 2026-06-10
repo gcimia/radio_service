@@ -42,6 +42,7 @@ abstract class RadioServicePlatform extends PlatformInterface {
   Future<void> configure({
     bool equalizerEnabled  = true,
     bool backgroundEnabled = true,
+    bool autoResumeAfterFocusLoss = true,
   }) => throw UnimplementedError('configure() not implemented.');
 
   /// Reçoit l'URL du proxy local Dart (http://127.0.0.1:PORT/stream).
@@ -67,6 +68,11 @@ abstract class RadioServicePlatform extends PlatformInterface {
 
   Future<void> stop() =>
       throw UnimplementedError('stop() not implemented.');
+
+  /// Libération globale des ressources natives (player, MediaSession,
+  /// foreground service, notification). À appeler à la fermeture définitive.
+  Future<void> release() =>
+      throw UnimplementedError('release() not implemented.');
 
   Future<void> setVolume(double volume) =>
       throw UnimplementedError('setVolume() not implemented.');

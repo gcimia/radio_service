@@ -1,11 +1,8 @@
-import 'dart:typed_data';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'radio_service_platform_interface.dart';
-import 'src/equalizer/equalizer_config.dart';
-import 'src/player/player_position.dart';
-import 'src/player/player_state.dart';
 
 /// Implémentation MethodChannel — Android (et iOS à venir).
 ///
@@ -34,7 +31,27 @@ class MethodChannelRadioService extends RadioServicePlatform {
   @override
   Stream<PlayerState> get stateStream => _rawEvents
       .where((e) => e['type'] == 'state')
-      .map((e) => _toPlayerState(e['value'] as String));
+      .map<PlayerState>((e) {
+        final value = e['value'] as String;
+        if (value == 'error') {
+          return PlayerError(e['message'] as String? ?? 'Erreur de lecture');
+        }
+        return _toPlayerState(value);
+      })
+      // Filet de sécurité : toute erreur de canal résiduelle (ancien
+      // sink.error, déconnexion brutale…) est convertie en PlayerError
+      // (donnée) au lieu de se propager dans onError et de laisser l'UI bloquée.
+      .transform(_errorToStateTransformer);
+
+  // Convertit les erreurs de stream en événements PlayerError (donnée),
+  // pour que les abonnés UI ne reçoivent jamais d'erreur non gérée.
+  static final StreamTransformer<PlayerState, PlayerState>
+      _errorToStateTransformer =
+      StreamTransformer<PlayerState, PlayerState>.fromHandlers(
+    handleError: (error, stackTrace, sink) {
+      sink.add(PlayerError(error.toString()));
+    },
+  );
 
   PlayerState _toPlayerState(String value) => switch (value) {
     'idle'      => PlayerIdle(),
@@ -64,10 +81,12 @@ class MethodChannelRadioService extends RadioServicePlatform {
   Future<void> configure({
     bool equalizerEnabled  = true,
     bool backgroundEnabled = true,
+    bool autoResumeAfterFocusLoss = true,
   }) =>
       methodChannel.invokeMethod('configure', {
         'equalizerEnabled':  equalizerEnabled,
         'backgroundEnabled': backgroundEnabled,
+        'autoResumeAfterFocusLoss': autoResumeAfterFocusLoss,
       });
 
   /// Transmet l'URL à ExoPlayer.
@@ -94,6 +113,9 @@ class MethodChannelRadioService extends RadioServicePlatform {
 
   @override
   Future<void> stop() => methodChannel.invokeMethod('stop');
+
+  @override
+  Future<void> release() => methodChannel.invokeMethod('release');
 
   @override
   Future<void> setVolume(double volume) =>

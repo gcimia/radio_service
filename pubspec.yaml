@@ -1,6 +1,6 @@
 name: radio_service
 description: "A Flutter plugin for streaming internet radio with full metadata support, artwork resolution, equalizer, and background playback."
-version: 0.0.1
+version: 0.0.2
 homepage: https://github.com/gcimia/radio_service
 repository: https://github.com/gcimia/radio_service
 issue_tracker: https://github.com/gcimia/radio_service/issues

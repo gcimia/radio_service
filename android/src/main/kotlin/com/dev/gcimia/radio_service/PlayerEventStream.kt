@@ -55,9 +55,13 @@ class PlayerEventStream : EventChannel.StreamHandler {
         }
     }
 
-    fun sendError(message: String) {
+    // Erreur de lecture émise comme ÉTAT (event de données), pas comme erreur
+    // de canal. Ainsi elle arrive côté Dart via onData et devient un PlayerError
+    // exploitable par l'UI (au lieu de partir dans onError du stream et d'être
+    // ignorée, ce qui laissait le loader tourner indéfiniment).
+    fun sendErrorState(message: String) {
         runOnMain {
-            sink?.error("PLAYBACK_ERROR", message, null)
+            sink?.success(mapOf("type" to "state", "value" to "error", "message" to message))
         }
     }
 }
