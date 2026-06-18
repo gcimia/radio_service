@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Configuration de sécurité réseau Android — RESSOURCE DU PLUGIN radio_service.
+
+    POURQUOI CE FICHIER EST ICI (et plus seulement dans example/) :
+    Le AndroidManifest.xml du plugin référence @xml/network_security_config
+    (attribut android:networkSecurityConfig de la balise <application>).
+    Cette ressource doit donc exister DANS le plugin lui-même, à ce chemin :
+        android/src/main/res/xml/network_security_config.xml
+    Sans elle, le resource linking échoue en build release
+    (tâche verifyReleaseResources) : « resource xml/network_security_config not found ».
+
+    Rôle : autoriser le trafic HTTP EN CLAIR uniquement vers le proxy audio
+    local (127.0.0.1 / localhost) auquel ExoPlayer se connecte ; tout autre
+    trafic reste en HTTPS obligatoire.
+-->
+<network-security-config>
+
+    <!-- Trafic vers les APIs externes — HTTPS uniquement, pas d'exception -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Exception ciblée : proxy audio local Dart (AudioProxyServer) -->
+    <!-- ExoPlayer se connecte à http://127.0.0.1:PORT/stream           -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+
+</network-security-config>

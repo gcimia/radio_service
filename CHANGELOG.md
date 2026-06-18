@@ -1,56 +1,67 @@
+## 0.0.3
+
+### Fixed
+* Added the missing `network_security_config.xml` resource under
+  `android/src/main/res/xml/`. The Android manifest referenced
+  `@xml/network_security_config`, but the file only existed in the example app,
+  which caused release builds to fail during resource linking
+  (`verifyReleaseResources`: "resource xml/network_security_config not found").
+  The configuration permits cleartext HTTP only to the local audio proxy
+  (127.0.0.1 / localhost); all other traffic remains HTTPS-only.
+
 ## 0.0.2
 
-### Corrections
-* Les erreurs de lecture remontent désormais à l'UI sous forme de `PlayerError`
-  (auparavant envoyées comme erreurs de canal, jamais visibles) — fini le
-  loader infini quand une radio est indisponible.
-* Watchdog « premier octet » : si aucune donnée audio n'arrive dans les 15 s
-  suivant la connexion, le flux est déclaré indisponible (`PlayerError`).
-* L'état d'erreur n'est plus écrasé par le `STATE_IDLE` automatique
-  qu'ExoPlayer émet après une erreur.
-* `IcyStreamReader` signale l'épuisement des tentatives de reconnexion
-  (callback `onUnavailable`) au lieu d'abandonner en silence.
+### Fixes
+* Playback errors now surface to the UI as `PlayerError` (previously sent as
+  channel errors that were never visible) — no more infinite loader when a
+  station is unavailable.
+* "First byte" watchdog: if no audio data arrives within 15 s of connecting,
+  the stream is declared unavailable (`PlayerError`).
+* The error state is no longer overwritten by the automatic `STATE_IDLE` that
+  ExoPlayer emits after an error.
+* `IcyStreamReader` reports reconnection-attempt exhaustion (`onUnavailable`
+  callback) instead of giving up silently.
 
-### Focus audio (Android)
-* Gestion manuelle du focus audio (remplace `handleAudioFocus` de Media3) :
-  pause sur interruption (appel, autre appli média), ducking sur les
-  interruptions courtes (notification, GPS), reprise au retour du focus.
-* Nouveau paramètre `autoResumeAfterFocusLoss` (défaut `true`) : si `false`,
-  la lecture reste en pause après une interruption — reprise manuelle.
+### Audio focus (Android)
+* Manual audio-focus handling (replaces Media3's `handleAudioFocus`): pause on
+  interruption (call, another media app), ducking on short interruptions
+  (notification, GPS), resume when focus returns.
+* New `autoResumeAfterFocusLoss` parameter (default `true`): when `false`,
+  playback stays paused after an interruption — manual resume required.
 
-### Cycle de vie & ressources (Android)
-* Nouvelle méthode native `release()` appelée par `RadioService.dispose()` :
-  arrête le foreground service et libère player, MediaSession et notification.
-  Plus aucune ressource ne survit à la fermeture de l'application.
-* `configure(backgroundEnabled: false)` arrête désormais le service s'il
-  tournait (libération par fonctionnalité).
-* Balayage de l'appli depuis les récents (`onTaskRemoved`) : arrêt de la
-  lecture et libération complète.
-* `dispose()` est désormais idempotent (garde anti double-libération).
+### Lifecycle & resources (Android)
+* New native `release()` method called by `RadioService.dispose()`: stops the
+  foreground service and releases the player, MediaSession and notification.
+  No resource survives application shutdown.
+* `configure(backgroundEnabled: false)` now stops the service if it was
+  running (release per feature).
+* Swiping the app away from recents (`onTaskRemoved`): playback stops and
+  resources are fully released.
+* `dispose()` is now idempotent (guard against double release).
 
 ### Toolchain
-* Alignement sur Flutter 3.44 : AGP 9.0.1, Kotlin 2.3.20, Gradle 9.1.0
-  (exemple), `android.builtInKotlin=false` (état supporté par Flutter 3.44.x).
-* Contrainte d'environnement : Flutter >= 3.44.0, Dart ^3.12.0.
+* Aligned with Flutter 3.44: AGP 9.0.1, Kotlin 2.3.20, Gradle 9.1.0 (example),
+  `android.builtInKotlin=false` (state supported by Flutter 3.44.x).
+* Environment constraint: Flutter >= 3.44.0, Dart ^3.12.0.
 
-### Divers
-* Implémentation web alignée sur l'interface (`configure`, `release`) et
-  nettoyée (imports redondants, membre `metadataStream` documenté comme
-  spécifique au web).
+### Misc
+* Web implementation aligned with the interface (`configure`, `release`) and
+  cleaned up (redundant imports, `metadataStream` member documented as
+  web-specific).
 
 ## 0.0.1
 
-Première version.
+First release.
 
-### Fonctionnalités
-* Lecture de flux radio en streaming (ICY / SHOUTcast / Icecast, MP3 / AAC / OGG).
-* Analyse automatique des métadonnées ICY (titre, artiste, nom de station).
-* Récupération des métadonnées via API REST (chemins JSON imbriqués).
-* Résolution de pochettes (iTunes / Deezer) avec cache LRU.
-* Égaliseur 5 bandes avec presets.
-* Lecture en arrière-plan et contrôles via la notification système (Android).
-* Détection de silence / flux inactif.
+### Features
+* Radio stream playback (ICY / SHOUTcast / Icecast, MP3 / AAC / OGG).
+* Automatic ICY metadata parsing (title, artist, station name).
+* Metadata retrieval via REST API (nested JSON paths).
+* Artwork resolution (iTunes / Deezer) with LRU cache.
+* 5-band equalizer with presets.
+* Background playback and system-notification controls (Android).
+* Silence / inactive-stream detection.
 
-### Plateformes
-* Android : pris en charge.
-* iOS : prévu.
+### Platforms
+* Android: supported.
+* iOS: planned.
