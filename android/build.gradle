@@ -1,24 +1,24 @@
 group = "com.dev.gcimia.radio_service"
 version = "1.0-SNAPSHOT"
 
-// État supporté par Flutter 3.44.1 (android.builtInKotlin=false) :
+// État supporté par Flutter 3.44.6 (android.builtInKotlin=false) :
 // le plugin applique le Kotlin Gradle Plugin de façon classique (legacy),
 // ce qui fonctionne grâce au support temporaire KGP de Flutter sous AGP 9.
-// Versions alignées sur le trio testé par Flutter 3.44.1 : AGP 9.0.1 / KGP 2.3.20.
+// Versions alignées sur le trio testé par Flutter 3.44.6 : AGP 9.2.1 / KGP 2.4.10.
 // NB : la migration "built-in Kotlin" du plugin (suppression de ce buildscript
 // + retrait de kotlin-android) ne pourra être activée qu'une fois le projet
 // passé en android.builtInKotlin=true, ce qui suppose des plugins embarqués
-// (integration_test) compatibles — pas le cas en 3.44.1.
+// (integration_test) compatibles — pas le cas en 3.44.6.
 
 buildscript {
-    ext.kotlin_version = "2.3.20"
+    ext.kotlin_version = "2.4.10"
     repositories {
         google()
         mavenCentral()
     }
 
     dependencies {
-        classpath("com.android.tools.build:gradle:9.0.1")
+        classpath("com.android.tools.build:gradle:9.2.1")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
     }
 }
@@ -31,7 +31,6 @@ allprojects {
 }
 
 apply plugin: "com.android.library"
-apply plugin: "kotlin-android"
 
 android {
     namespace = "com.dev.gcimia.radio_service"
@@ -53,18 +52,20 @@ android {
     }
 
     dependencies {
+        def media3_version = "1.10.1"
+
         testImplementation("org.jetbrains.kotlin:kotlin-test")
-        testImplementation("org.mockito:mockito-core:5.0.0")
+        testImplementation("org.mockito:mockito-core:5.23.0")
 
         // AndroidX Core — fournit ContextCompat.startForegroundService(),
         // ServiceCompat.stopForeground() et autres compat API multi-version
-        implementation("androidx.core:core-ktx:1.13.1")
+        implementation("androidx.core:core-ktx:1.19.0")
 
-        implementation("androidx.media3:media3-exoplayer:1.6.1")
-        implementation("androidx.media3:media3-exoplayer-hls:1.6.1")
-        implementation("androidx.media3:media3-datasource:1.6.1")
-        implementation("androidx.media3:media3-session:1.6.1")
-        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+        implementation("androidx.media3:media3-exoplayer:$media3_version")
+        implementation("androidx.media3:media3-exoplayer-hls:$media3_version")
+        implementation("androidx.media3:media3-datasource:$media3_version")
+        implementation("androidx.media3:media3-session:$media3_version")
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     }
 
     testOptions {

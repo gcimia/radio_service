@@ -23,7 +23,7 @@ Built for Android (iOS support planned). Handles ICY streams, SHOUTcast, AAC, MP
 
 ```yaml
 dependencies:
-  radio_service: ^0.0.2
+  radio_service: ^0.1.4
 ```
 
 ---

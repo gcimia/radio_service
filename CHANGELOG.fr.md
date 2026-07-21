@@ -3,6 +3,18 @@
   Le fichier de référence pour pub.dev est CHANGELOG.md (anglais).
 -->
 
+## 0.1.4
+
+### Maintenance
+* Toolchain Android mise à jour vers les versions testées avec Flutter 3.44.6 :
+  Android Gradle Plugin 9.2.1 et Kotlin 2.4.10. Les avertissements de
+  compatibilité du Kotlin Gradle Plugin (KGP) émis par les versions
+  précédentes de Flutter ont disparu.
+* Dépendances natives montées : Media3 1.10.1, androidx.core-ktx 1.19.0,
+  kotlinx-coroutines 1.11.0 et Mockito 5.23.0 (tests).
+* Dépendances Dart montées : web 1.1.1, plugin_platform_interface 2.1.8,
+  http 1.6.0, path_provider 2.1.6.
+
 ## 0.0.3
 
 ### Corrections

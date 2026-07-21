@@ -1,3 +1,14 @@
+## 0.1.4
+
+### Maintenance
+* Android toolchain updated to the versions tested with Flutter 3.44.6:
+  Android Gradle Plugin 9.2.1 and Kotlin 2.4.10. The Kotlin Gradle Plugin (KGP)
+  compatibility warnings emitted by earlier Flutter versions are now gone.
+* Native dependencies bumped: Media3 1.10.1, androidx.core-ktx 1.19.0,
+  kotlinx-coroutines 1.11.0, and Mockito 5.23.0 (tests).
+* Dart dependencies bumped: web 1.1.1, plugin_platform_interface 2.1.8,
+  http 1.6.0, path_provider 2.1.6.
+
 ## 0.0.3
 
 ### Fixed

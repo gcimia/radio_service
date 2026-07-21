@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Politique de fins de ligne (à la RACINE du dépôt radio_service).
+# Corrige l'avertissement GitHub Desktop « LF → CRLF » : les fichiers texte sont
+# stockés ET extraits en LF, quelle que soit la config git locale (core.autocrlf).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Auto-détection + normalisation en LF au checkout (override de core.autocrlf).
+* text=auto eol=lf
+
+# Scripts Windows : doivent rester en CRLF pour fonctionner.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Fichiers binaires : jamais de conversion de fins de ligne.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.icns   binary
+*.jar    binary
+*.keystore binary
+*.jks    binary
+*.p12    binary
+*.ttf    binary
+*.otf    binary
+*.woff   binary
+*.woff2  binary
+*.so     binary
+*.dll    binary
+*.dylib  binary
+*.a      binary
+*.zip    binary
