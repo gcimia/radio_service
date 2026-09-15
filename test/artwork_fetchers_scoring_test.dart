@@ -7,7 +7,7 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 
-import '../lib/src/artwork/artwork_fetchers.dart';
+import 'package:radio_service/src/artwork/artwork_fetchers.dart';
 
 // ---------------------------------------------------------------------------
 // Helpers — accès aux fonctions privées via des wrappers de test

@@ -103,11 +103,17 @@ class MetadataPoller {
 
     // Remplace le paramètre anti-cache existant (ck, _t, t, _) ou en ajoute un
     final params = Map<String, String>.from(base.queryParameters);
-    if (params.containsKey('ck'))  params['ck']  = ts;
-    else if (params.containsKey('_t')) params['_t'] = ts;
-    else if (params.containsKey('t'))  params['t']  = ts;
-    else if (params.containsKey('_'))  params['_']  = ts;
-    else params['_t'] = ts;  // ajoute si absent
+    if (params.containsKey('ck')) {
+      params['ck'] = ts;
+    } else if (params.containsKey('_t')) {
+      params['_t'] = ts;
+    } else if (params.containsKey('t')) {
+      params['t'] = ts;
+    } else if (params.containsKey('_')) {
+      params['_'] = ts;
+    } else {
+      params['_t'] = ts;  // ajoute si absent
+    }
 
     return base.replace(queryParameters: params);
   }

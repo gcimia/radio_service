@@ -75,6 +75,10 @@ class RadioService {
   /// Nom et logo de la station — mémorisés dès le header ICY.
   /// Utilisés comme fallback dans la notification quand pas de méta musicale.
   String? _stationName;
+  // Mémorisé depuis setUrl(stationLogoUrl:) mais pas encore consommé : le
+  // fallback « logo station » dans la notification n'est pas implémenté.
+  // Le paramètre public est conservé pour ne pas casser les appelants.
+  // ignore: unused_field
   String? _stationLogoUrl;
   /// Bytes de la dernière pochette musicale — fallback pendant jingles/pubs.
   Uint8List? _lastMusicArtworkData;
@@ -154,11 +158,19 @@ class RadioService {
       _artworkResolver = ArtworkResolver(config: artworkConfig);
       _artworkResolver!.clearCache();
     }
-    // Envoie la configuration initiale au natif
-    RadioServicePlatform.instance.configure(
-      equalizerEnabled:  equalizerEnabled,
-      backgroundEnabled: backgroundEnabled,
-      autoResumeAfterFocusLoss: autoResumeAfterFocusLoss,
+    // Envoie la configuration initiale au natif.
+    // L'appel n'est pas attendu, donc son échec deviendrait une erreur
+    // asynchrone non capturée : sur une plateforme sans implémentation native
+    // (iOS, desktop), le simple fait de construire RadioService faisait
+    // remonter une MissingPluginException hors de toute pile d'appel.
+    unawaited(
+      RadioServicePlatform.instance.configure(
+        equalizerEnabled:  equalizerEnabled,
+        backgroundEnabled: backgroundEnabled,
+        autoResumeAfterFocusLoss: autoResumeAfterFocusLoss,
+      ).catchError((Object e) {
+        debugPrint('[RadioService] configure() a échoué : $e');
+      }),
     );
 
     // Redirige les états natifs (ExoPlayer) vers le flux unifié.
@@ -169,6 +181,23 @@ class RadioService {
       },
     );
   }
+
+  // ── Plateformes ────────────────────────────────────────────────────────────
+
+  /// Plateformes réellement implémentées.
+  ///
+  /// Seul Android dispose d'une implémentation native. iOS, macOS, Windows,
+  /// Linux et le web n'ont que le squelette généré par Flutter — le plugin ne
+  /// les déclare donc plus dans son `pubspec.yaml`.
+  ///
+  /// Toute la couche Dart (connexion ICY, proxy, métadonnées, pochettes,
+  /// reconnexion) est en revanche indépendante de la plateforme : c'est le
+  /// moteur de lecture et l'intégration système qui manquent.
+  static bool get isPlatformSupported => Platform.isAndroid;
+
+  static String get _unsupportedMessage =>
+      'radio_service ne gère que Android pour le moment '
+      '(plateforme courante : ${Platform.operatingSystem}).';
 
   // ── Commandes principales ──────────────────────────────────────────────────
 
@@ -188,6 +217,16 @@ class RadioService {
       }) async {
     // Arrêt de tout ce qui était en cours
     await _stopStream();
+
+    // Plateforme sans moteur natif : on le dit à l'UI au lieu de laisser
+    // remonter une MissingPluginException depuis les profondeurs du canal.
+    if (!isPlatformSupported) {
+      debugPrint('[RadioService] $_unsupportedMessage');
+      if (!_stateController.isClosed) {
+        _stateController.add(PlayerError(_unsupportedMessage));
+      }
+      return;
+    }
 
     // Jeton de CE flux. Il est pris APRÈS l'arrêt : si deux setUrl se
     // chevauchent, chacun prend un jeton neuf et seul le dernier reste
@@ -492,7 +531,9 @@ class RadioService {
     if (emitKey == _lastEmittedKey) return;
     if (titleKey.isNotEmpty &&
         titleKey == _lastEmittedTitle &&
-        artistKey.isEmpty) return;
+        artistKey.isEmpty) {
+      return;
+    }
 
     _lastEmittedKey   = emitKey;
     _lastEmittedTitle = titleKey;

@@ -3,6 +3,78 @@
   Le fichier de référence pour pub.dev est CHANGELOG.md (anglais).
 -->
 
+## 0.1.6
+
+Version d'hygiène — aucun changement de comportement sur la lecture, les
+métadonnées ou la reconnexion. Zéro avertissement et zéro info de l'analyseur,
+déclaration de la seule plateforme réellement existante, et passage du build
+Android au Kotlin DSL avec le bloc `plugins` déclaratif.
+
+### RUPTURE (empaquetage et environnement, pas API)
+* Environnement minimal relevé à **Flutter 3.47 / Dart ^3.13**, contre
+  Flutter 3.44 / Dart ^3.12. Le Kotlin intégré sous AGP 9 demande Flutter 3.47,
+  et rester en dessous aurait maintenu l'échappatoire
+  `android.builtInKotlin=false` — celle-là même qu'AGP 10 supprime.
+* Le plugin ne déclare plus que **Android** dans `pubspec.yaml`. `ios`,
+  `macos`, `windows`, `linux` et `web` ne sont plus déclarés : ces dossiers ne
+  contiennent que le squelette de `flutter create` (`getPlatformVersion` et
+  rien d'autre). Les déclarer faisait enregistrer un plugin qui ne répondait à
+  aucune méthode, et chaque appel remontait une `MissingPluginException`. Les
+  sources sont conservées comme point de départ des portages — il suffira de
+  réintroduire l'entrée correspondante.
+* `ArtworkCache.diskCacheDuration` et `ArtworkCache.diskCacheDir` deviennent
+  des champs publics (ils étaient privés et seulement affectés). Classe
+  interne, sans impact sur les applications hôtes.
+
+### Ajouté
+* `RadioService.isPlatformSupported` — vrai sur Android, faux ailleurs.
+* Sur une plateforme non gérée, `setUrl()` émet désormais un `PlayerError`
+  nommant la plateforme, au lieu de laisser remonter une
+  `MissingPluginException` depuis les profondeurs du canal.
+* L'appel `configure()` du constructeur, lancé sans être attendu, est protégé :
+  son échec est journalisé au lieu de devenir une erreur asynchrone non
+  capturée. Construire `RadioService` sur iOS ou desktop levait hors pile.
+
+### Build Android — Kotlin DSL et nouveau DSL AGP
+* `android/build.gradle` (Groovy) remplacé par `android/build.gradle.kts`, et
+  `android/settings.gradle` par `android/settings.gradle.kts`.
+* Le bloc déclaratif `plugins { id("com.android.library") }` remplace
+  `apply plugin:`, et le `buildscript { classpath(AGP/KGP) }` du module
+  disparaît : le module du plugin est un sous-projet du build de
+  l'application, donc les versions viennent du `pluginManagement` de l'app.
+  L'ancien fichier épinglait une seconde version d'AGP pour rien.
+* `dependencies { }` sort du bloc `android { }`, où il ne fonctionnait que par
+  une délégation Groovy.
+* `android.newDsl=false` et `android.builtInKotlin=false` retirés du
+  `gradle.properties` de l'exemple. Les deux échappatoires disparaissent avec
+  AGP 10, et le passage à Flutter 3.47 débloque le Kotlin intégré. Le module
+  du plugin n'applique aucun Kotlin Gradle Plugin en propre — AGP le fournit.
+* Media3 monté en 1.11.1.
+
+### Nettoyage — analyseur à zéro
+* Imports redondants supprimés (`dart:typed_data` couvert par
+  `package:flutter/foundation.dart`, `player_state` / `player_position`
+  couverts par l'interface de plateforme, imports inutilisés de l'interface de
+  plateforme dont les `export` restent).
+* `MethodChannelRadioService` utilise les éléments de map null-aware
+  (`'clé': ?valeur`) au lieu des entrées `if (x != null)`.
+* `ArtworkCache` utilise des paramètres d'initialisation.
+* Accolades ajoutées autour des `if` d'une seule instruction dans
+  `MetadataPoller` et `RadioService`.
+* Chevrons échappés dans les commentaires de documentation d'`IcyStreamReader`.
+* Les tests importent via `package:radio_service/…` au lieu de chemins
+  relatifs `../lib/` ; un paramètre de stub mort et un import redondant
+  supprimés.
+* La vingtaine de constantes de flux éparses de l'exemple est regroupée dans
+  une table `_streams` réellement utilisée — rien de perdu, une seule ligne
+  (`_selected`) à changer pour tester une autre radio. Le test d'intégration
+  vide est devenu un vrai fumigène construction / libération.
+
+### Divers
+* Les podspecs iOS et macOS ne sont plus le gabarit généré (version, résumé,
+  description, page d'accueil, auteur) et disent clairement que la plateforme
+  n'est pas encore implémentée.
+
 ## 0.1.5
 
 ### RUPTURE

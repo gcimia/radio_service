@@ -1,6 +1,4 @@
 import '../../radio_service_platform_interface.dart';
-import 'player_position.dart';
-import 'player_state.dart';
 
 // Expose les commandes de lecture et les streams d'état/position.
 // Délègue tout à RadioServicePlatform.instance —
@@ -16,9 +14,11 @@ class PlayerController {
   /// lecteur ICY aurait continué à se reconnecter et à consommer données et
   /// batterie après un arrêt volontaire. Les appelants existants ne changent
   /// pas : `service.player.stop()` garde exactement la même signature.
-  // ignore: prefer_initializing_formals
   // Un paramètre nommé ne peut pas commencer par un souligné : `this._onStop`
-  // est interdit. L'affectation explicite est donc la seule forme possible.
+  // est interdit par le langage. L'affectation explicite est donc la seule
+  // forme possible ici — l'ignore doit rester COLLÉ à la ligne visée, une
+  // ligne de commentaire intercalée le rendrait inopérant.
+  // ignore: prefer_initializing_formals
   PlayerController({Future<void> Function()? onStop}) : _onStop = onStop;
 
   final Future<void> Function()? _onStop;

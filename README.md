@@ -23,7 +23,7 @@ Built for Android (iOS support planned). Handles ICY streams, SHOUTcast, AAC, MP
 
 ```yaml
 dependencies:
-  radio_service: ^0.1.5
+  radio_service: ^0.1.6
 ```
 
 ---
@@ -320,6 +320,28 @@ await service.dispose();
 
 Swiping the app away from the recent apps screen also stops playback and
 releases all native resources.
+
+---
+
+## Platforms
+
+| Platform | Status |
+|----------|--------|
+| Android  | ✅ Supported (ExoPlayer Media3, background service, lock screen, equalizer) |
+| iOS      | ⛔ Not implemented — generated skeleton only |
+| macOS / Windows / Linux | ⛔ Not implemented — generated skeleton only |
+| Web      | ⛔ Not implemented — `RadioServiceWeb` exists but the `RadioService` facade depends on `dart:io` |
+
+Only `android` is declared in `pubspec.yaml`. Declaring the others would
+register a plugin answering no method, so every call would raise
+`MissingPluginException`. `RadioService.isPlatformSupported` reports this, and
+`setUrl()` emits a `PlayerError` naming the platform rather than failing deep
+inside the channel.
+
+The whole Dart layer — ICY connection, local audio proxy, metadata parsing,
+playlist resolution, artwork resolution and the reconnection policy — is
+already platform independent. What each port needs is the playback engine and
+the system integration: notification / lock screen, audio focus, equalizer.
 
 ---
 

@@ -8,8 +8,8 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 
-import '../lib/src/metadata/metadata_parser.dart';
-import '../lib/src/metadata/player_metadata.dart';
+import 'package:radio_service/src/metadata/metadata_parser.dart';
+import 'package:radio_service/src/metadata/player_metadata.dart';
 
 void main() {
   // ── MetadataParser ────────────────────────────────────────────────────────

@@ -4,8 +4,6 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'radio_service_method_channel.dart';
 import 'src/buffer/buffer_config.dart';
 import 'src/equalizer/equalizer_config.dart';
-import 'src/metadata/player_metadata.dart';
-import 'src/metadata/metadata_mapping.dart';
 import 'src/player/player_position.dart';
 import 'src/player/player_state.dart';
 

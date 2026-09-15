@@ -4,14 +4,12 @@
 /// Les stubs HTTP sont en Dart pur via surcharge de SimpleHttpClient.
 library;
 
-import 'dart:async';
-
 import 'package:flutter_test/flutter_test.dart';
 
-import '../lib/src/artwork/artwork_cache.dart';
-import '../lib/src/artwork/artwork_fetchers.dart';
-import '../lib/src/artwork/artwork_resolver.dart';
-import '../lib/src/artwork/artwork_resolver_config.dart';
+import 'package:radio_service/src/artwork/artwork_cache.dart';
+import 'package:radio_service/src/artwork/artwork_fetchers.dart';
+import 'package:radio_service/src/artwork/artwork_resolver.dart';
+import 'package:radio_service/src/artwork/artwork_resolver_config.dart';
 
 // ---------------------------------------------------------------------------
 // Stubs HTTP
@@ -39,10 +37,10 @@ class _StubHttpClient extends SimpleHttpClient {
 }
 
 class _DelayedStub extends SimpleHttpClient {
-  _DelayedStub(this._response, {this.delayMs = 30});
+  _DelayedStub(this._response);
 
   final Map<String, dynamic> _response;
-  final int delayMs;
+  static const delayMs = 30;
   int callCount = 0;
 
   @override

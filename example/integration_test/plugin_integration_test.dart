@@ -1,11 +1,7 @@
-// This is a basic Flutter integration test.
+// Test d'intégration — tourne dans une vraie application Flutter, donc face
+// à l'implémentation native du plugin (contrairement aux tests unitaires Dart).
 //
-// Since integration tests run in a full Flutter application, they can interact
-// with the host side of a plugin implementation, unlike Dart unit tests.
-//
-// For more information about Flutter integration tests, please see
 // https://flutter.dev/to/integration-testing
-
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -15,4 +11,15 @@ import 'package:radio_service/radio_service.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
+  // Fumigène : la construction envoie configure() au natif et dispose()
+  // déclenche release(). Si le canal ou l'enregistrement du plugin sont
+  // cassés, ce test échoue avant tout le reste.
+  testWidgets('construction et libération sans erreur native',
+      (WidgetTester tester) async {
+    final service = RadioService(
+      equalizerEnabled:  false,
+      backgroundEnabled: false,
+    );
+    await service.dispose();
+  });
 }

@@ -1,3 +1,73 @@
+## 0.1.6
+
+Housekeeping release — no behaviour change to playback, metadata or
+reconnection. Cleared every analyzer warning and info, declared only the
+platform that actually exists, and moved the Android build to the Kotlin DSL
+with the declarative `plugins` block.
+
+### BREAKING (packaging and environment, not API)
+* Minimum environment raised to **Flutter 3.47 / Dart ^3.13**, from
+  Flutter 3.44 / Dart ^3.12. Built-in Kotlin under AGP 9 needs Flutter 3.47,
+  and staying below it would have kept the `android.builtInKotlin=false`
+  opt-out alive — an opt-out that AGP 10 removes.
+* The plugin now declares **Android only** in `pubspec.yaml`. `ios`, `macos`,
+  `windows`, `linux` and `web` are no longer declared: those folders hold
+  nothing but the `flutter create` skeleton (`getPlatformVersion` and nothing
+  else), so declaring them registered a plugin that answered no method and
+  every call raised `MissingPluginException`. The sources are kept as the
+  starting point for the ports — re-adding an entry is all it takes.
+* `ArtworkCache.diskCacheDuration` and `ArtworkCache.diskCacheDir` are now
+  public fields (they were private and only assigned). Internal class; no
+  impact on host applications.
+
+### Added
+* `RadioService.isPlatformSupported` — true on Android, false elsewhere.
+* On an unsupported platform, `setUrl()` now emits a `PlayerError` naming the
+  platform instead of letting a `MissingPluginException` surface from inside
+  the channel.
+* The constructor's fire-and-forget `configure()` call is guarded: its failure
+  is logged instead of becoming an unhandled async error. Constructing
+  `RadioService` on iOS or desktop previously threw out of band.
+
+### Android build — Kotlin DSL and new AGP DSL
+* `android/build.gradle` (Groovy) replaced by `android/build.gradle.kts`, and
+  `android/settings.gradle` by `android/settings.gradle.kts`.
+* The declarative `plugins { id("com.android.library") }` block replaces
+  `apply plugin:`, and the module's own `buildscript { classpath(AGP/KGP) }`
+  is gone: the plugin module is a subproject of the application's build, so
+  the versions come from the app's `pluginManagement`. The old file pinned a
+  second AGP version for nothing.
+* `dependencies { }` moved out of `android { }`, where it only worked through
+  a Groovy delegation quirk.
+* `android.newDsl=false` and `android.builtInKotlin=false` removed from the
+  example's `gradle.properties`. Both opt-outs disappear in AGP 10, and the
+  move to Flutter 3.47 unblocks built-in Kotlin. The plugin module applies no
+  Kotlin Gradle Plugin of its own — AGP provides it.
+* Media3 bumped to 1.11.1.
+
+### Cleanup — analyzer down to zero
+* Removed redundant imports (`dart:typed_data` covered by
+  `package:flutter/foundation.dart`, `player_state` / `player_position`
+  covered by the platform interface, unused imports in the platform interface
+  whose `export` lines stay).
+* `MethodChannelRadioService` uses null-aware map elements (`'key': ?value`)
+  instead of `if (x != null)` entries.
+* `ArtworkCache` uses initializing formals.
+* Braces added around single-statement `if` bodies in `MetadataPoller` and
+  `RadioService`.
+* Angle brackets escaped in the `IcyStreamReader` doc comments.
+* Tests import through `package:radio_service/…` instead of relative `../lib/`
+  paths; removed an unused stub parameter and a redundant import.
+* The example app's twenty-odd loose stream constants are gathered into one
+  used `_streams` table — nothing lost, one line (`_selected`) to change to
+  test another station. The empty integration test became a real construct /
+  dispose smoke test.
+
+### Misc
+* iOS and macOS podspecs are no longer the generated template (version,
+  summary, description, homepage, author), and state plainly that the
+  platform is not implemented yet.
+
 ## 0.1.5
 
 ### BREAKING

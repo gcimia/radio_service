@@ -11,7 +11,7 @@
 /// Formats de StreamTitle supportés :
 ///   - Texte  : "ARTISTE - TITRE" (ICY standard)
 ///   - JSON   : {"artist":"X","title":"Y"} (radios modernes)
-///   - XML    : <DNAS><SONGTITLE>…</SONGTITLE></DNAS> (SHOUTcast v2)
+///   - XML    : `<DNAS><SONGTITLE>…</SONGTITLE></DNAS>` (SHOUTcast v2)
 ///   - Titre seul sans séparateur
 ///   - Séparateurs alternatifs : " / ", " | "
 ///
@@ -23,7 +23,6 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
@@ -672,7 +671,7 @@ class ParsedStreamTitle {
 ///
 /// Formats supportés dans l'ordre de détection :
 ///   1. JSON  : {"artist":"X","title":"Y"} ou {"t":"Y","a":"X"}
-///   2. XML   : <DNAS><SONGTITLE>ARTISTE - TITRE</SONGTITLE></DNAS>
+///   2. XML   : `<DNAS><SONGTITLE>ARTISTE - TITRE</SONGTITLE></DNAS>`
 ///              (SHOUTcast v2)
 ///   3. Texte : "ARTISTE - TITRE" (ICY standard)
 ///              "ARTISTE / TITRE", "ARTISTE | TITRE"

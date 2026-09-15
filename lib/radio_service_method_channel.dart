@@ -102,7 +102,7 @@ class MethodChannelRadioService extends RadioServicePlatform {
       methodChannel.invokeMethod('setUrl', {
         'url':   proxyUrl,
         'isHls': isHls,
-        if (stationName != null) 'stationName': stationName,
+        'stationName': ?stationName,
       });
 
   @override
@@ -140,10 +140,10 @@ class MethodChannelRadioService extends RadioServicePlatform {
         // title toujours envoyé — même vide — pour forcer le reset Android.
         // Sans ça, Android conserve l'ancien titre si on passe null.
         'title':      title ?? '',
-        if (artist       != null) 'artist':       artist,
+        'artist':       ?artist,
         // Bytes de la pochette téléchargée côté Dart — Kotlin ne refait pas
         // d'appel réseau, ce qui évite la fenêtre sans image dans la notification.
-        if (artworkBytes != null) 'artworkBytes': artworkBytes,
+        'artworkBytes': ?artworkBytes,
       });
 
   @override

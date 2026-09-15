@@ -20,6 +20,12 @@ class RadioTestPage extends StatefulWidget {
   State<RadioTestPage> createState() => _RadioTestPageState();
 }
 
+/// Une entrée de la banque de flux de test.
+///   url         : flux à jouer (ICY progressif ou HLS .m3u8)
+///   metadataUrl : endpoint REST optionnel, pour les radios sans ICY
+///   mapping     : comment lire les champs dans la réponse JSON
+typedef _Stream = ({String url, String? metadataUrl, MetadataMapping? mapping});
+
 class _RadioTestPageState extends State<RadioTestPage> {
   final _service = RadioService(
     artworkConfig: ArtworkResolverConfig(
@@ -30,126 +36,141 @@ class _RadioTestPageState extends State<RadioTestPage> {
     ),
   );
 
-  // Radio Sofaia — flux MP3 + endpoint REST public avec artwork
-  static const _streamUrl0 = "https://radiosofaia.ice.infomaniak.ch/radiosofaia-high.aac";
-  // Rtl réunion
-  static const _streamUrl01   = 'https://rtlre.ice.infomaniak.ch/rtlre-64.aac';
+  // ── Banque de flux de test ────────────────────────────────────────────────
+  // Toutes les radios d'essai en une seule table, au lieu d'une constante par
+  // flux : elles restent disponibles et l'analyseur ne signale plus de champ
+  // mort. Pour tester une autre radio, changer [_selected] — rien d'autre.
+  //
+  static const Map<String, _Stream> _streams = {
+    // ── Flux ICY progressifs ────────────────────────────────────────────────
+    'Radio Sofaia':
+        (url: 'https://radiosofaia.ice.infomaniak.ch/radiosofaia-high.aac',
+         metadataUrl: null, mapping: null),
+    'RTL Réunion':
+        (url: 'https://rtlre.ice.infomaniak.ch/rtlre-64.aac',
+         metadataUrl: null, mapping: null),
+    'Antilles Média — Live':
+        (url: 'https://antillesmedia.pro-fhi.net:1165/stream',
+         metadataUrl: null, mapping: null),
+    'Antilles Média — Kompa':
+        (url: 'https://antillesmedia.pro-fhi.net/antillesmediakompa',
+         metadataUrl: null, mapping: null),
+    'Antilles Média — Zouk':
+        (url: 'https://antillesmedia.pro-fhi.net/antillesmediazouk',
+         metadataUrl: null, mapping: null),
+    'Antilles Média — Latine':
+        (url: 'https://antillesmedia.pro-fhi.net:1115/stream',
+         metadataUrl: null, mapping: null),
+    'Bel Radio Gpe':
+        (url: 'https://stream.rcs.revma.com/a7qacprtpwzuv',
+         metadataUrl: null, mapping: null),
+    'RHT Haute Tension':
+        (url: 'https://haute-tension.ice.infomaniak.ch/haute-tension-high.mp3',
+         metadataUrl: null, mapping: null),
+    'Espace FM':
+        (url: 'https://listen.radioking.com/radio/16769/stream/63784',
+         metadataUrl: null, mapping: null),
+    'Zikak':
+        (url: 'https://radio5.pro-fhi.net/listen-kowvdxtl-stream.mp3',
+         metadataUrl: null, mapping: null),
+    'Kot Karayib':
+        (url: 'https://listen.radioking.com/radio/378136/stream/429373',
+         metadataUrl: null, mapping: null),
+    'Guadeloupe 1ère':
+        (url: 'https://guadeloupe.ice.infomaniak.ch/guadeloupe-128.mp3',
+         metadataUrl: null, mapping: null),
+    // Variante avec point-virgule : https://radio3.pro-fhi.net:19004/;stream
+    'Radio Rossignol':
+        (url: 'https://radio3.pro-fhi.net:19004/stream',
+         metadataUrl: null, mapping: null),
+    'Cyber Streaming':
+        (url: 'https://stunnel2.cyber-streaming.com:9222/1',
+         metadataUrl: null, mapping: null),
 
+    // ── Flux HLS ────────────────────────────────────────────────────────────
+    // Vidéo Antilles Média TV — audio OK, pas de métadonnées musicales.
+    'HLS — Antilles Média TV':
+        (url: 'https://antillesmediavdo.pro-fhi.net:3663/live/amtvlive.m3u8',
+         metadataUrl: null, mapping: null),
+    'HLS — Antilles Média TV multi':
+        (url: 'https://antillesmediavdo.pro-fhi.net:3663/multi_live/play.m3u8',
+         metadataUrl: null, mapping: null),
+    // Radio France — tags ID3 timed metadata (TIT2/TPE1) remontés par
+    // MetadataExtractor.kt. Bonnes sources de test pour le chemin HLS.
+    'HLS — France Inter':
+        (url: 'https://stream.radiofrance.fr/franceinter/franceinter.m3u8',
+         metadataUrl: null, mapping: null),
+    'HLS — FIP':
+        (url: 'https://stream.radiofrance.fr/fip/fip.m3u8',
+         metadataUrl: null, mapping: null),
+    'HLS — FIP Reggae':
+        (url: 'https://stream.radiofrance.fr/fipreggae/fipreggae.m3u8',
+         metadataUrl: null, mapping: null),
+    'HLS — France Musique':
+        (url: 'https://stream.radiofrance.fr/francemusique/francemusique.m3u8',
+         metadataUrl: null, mapping: null),
+    'HLS — France Musique Opéra':
+        (url: 'https://stream.radiofrance.fr/francemusiqueopera/francemusiqueopera.m3u8',
+         metadataUrl: null, mapping: null),
+  };
 
-
-  // Antilles Média — flux ICY sans REST
-  static const _streamUrl1 = 'https://antillesmedia.pro-fhi.net:1165/stream'; // Live
-  static const _streamUrl2 = "https://antillesmedia.pro-fhi.net/antillesmediakompa"; // Kompa
-  static const _streamUrl3 = 'https://antillesmedia.pro-fhi.net/antillesmediazouk'; // Zouk
-  static const _streamUrl4 = "https://antillesmedia.pro-fhi.net:1115/stream"; // Latine
-
-  // Bel Radio Gpe
-  static const _streamUrl5 = 'https://stream.rcs.revma.com/a7qacprtpwzuv';
-  // RHT
-  static const _streamUrl6 = "https://haute-tension.ice.infomaniak.ch/haute-tension-high.mp3";
-  // ESPACE FM
-  static const _streamUrl7 = "https://listen.radioking.com/radio/16769/stream/63784";
-  // ZIKAK
-  static const _streamUrl8 = "https://radio5.pro-fhi.net/listen-kowvdxtl-stream.mp3";
-  // KOTKARAYIB
-  static const _streamUrl9 = "https://listen.radioking.com/radio/378136/stream/429373";
-  // GUADELOUPE 1ERE
-  static const _streamUrl10 = "https://guadeloupe.ice.infomaniak.ch/guadeloupe-128.mp3";
-  // RADIO ROSSIGNOL  https://radio3.pro-fhi.net:19004/;stream
-  static const _streamUrl11 = "https://radio3.pro-fhi.net:19004/stream";
-  // https://stunnel2.cyber-streaming.com:9222/1
-  static const _streamUrl12 = "https://stunnel2.cyber-streaming.com:9222/1";
-
-  // ── Flux HLS pour test ────────────────────────────────────────────────────
-  // Flux vidéo Antilles Média TV — audio HLS (pas de métadonnées musicales)
-  static const _hlsAmtvLive  = 'https://antillesmediavdo.pro-fhi.net:3663/live/amtvlive.m3u8';
-  static const _hlsAmtvMulti = 'https://antillesmediavdo.pro-fhi.net:3663/multi_live/play.m3u8';
-  // Radio France — flux HLS officiels avec tags ID3 timed metadata
-  // Ces flux contiennent titre + artiste via TextInformationFrame (TIT2/TPE1)
-  static const _hlsFranceInter  = 'https://stream.radiofrance.fr/franceinter/franceinter.m3u8';
-  static const _hlsFip          = 'https://stream.radiofrance.fr/fip/fip.m3u8';
-  static const _hlsFipReggae    = 'https://stream.radiofrance.fr/fipreggae/fipreggae.m3u8';
-  static const _hlsFranceMusique = 'https://stream.radiofrance.fr/francemusique/francemusique.m3u8';
-  static const _hlsMusiqueOpera = "https://stream.radiofrance.fr/francemusiqueopera/francemusiqueopera.m3u8";
-
-
-  // Mapping Radio Paradise — fournit une pochette via 'cover'
-  static const _mappingRP = MetadataMapping(
-    title:      'title',
-    artist:     'artist',
-    artworkUrl: 'cover',
-    startTime:  'start_time',
-  );
-
-  // Mapping Métis FM — JSON imbriqué sous la clé '8'
-  static const _mappingMetis = MetadataMapping(
-    title:      '8.current_song.title',
-    artist:     '8.current_song.artist',
-    artworkUrl: '8.current_song.img',
-  );
+  // Mappings REST conservés ici : à recopier dans une entrée de [_streams]
+  // (metadataUrl + mapping) pour tester une radio sans métadonnées ICY.
+  //
+  //   Radio Paradise — pochette fournie par le champ 'cover' :
+  //     MetadataMapping(title: 'title', artist: 'artist',
+  //                     artworkUrl: 'cover', startTime: 'start_time')
+  //
+  //   Métis FM — JSON imbriqué sous la clé '8' :
+  //     MetadataMapping(title:      '8.current_song.title',
+  //                     artist:     '8.current_song.artist',
+  //                     artworkUrl: '8.current_song.img')
 
   // ── Sélection active ───────────────────────────────────────────────────────
-  // Changer _play() pour tester une radio différente.
-  // Radio ICY simple : setUrl(url) — pas de paramètres optionnels.
-  // Radio avec REST  : ajouter metadataUrl + metadataMapping.
-  // stationName      : affiché dans la notification avant l'ICY (optionnel).
-  Future<void> _play() => _service
-      .setUrl(_streamUrl1, stationName: 'Guadeloupe 1ère')
-      .then((_) => _service.player.play());
+  // Une seule ligne à changer pour tester une autre radio.
+  static const _selected = 'Antilles Média — Live';
 
-  // Exemples commentés — décommenter pour tester :
-  //
-  // Avec logo station (fallback si pas de pochette) :
-  // Future<void> _play() => _service
-  //     .setUrl(_streamUrl1,
-  //   stationName:    'Antilles Média Radio',
-  //   stationLogoUrl: 'https://antillesmedia.com/wp-content/uploads/2024/06/am-zouk-370x370.png',
-  // ).then((_) => _service.player.play());
+  Future<void> _play() async {
+    final stream = _streams[_selected]!;
+    await _service.setUrl(
+      stream.url,
+      stationName:     _selected,
+      metadataUrl:     stream.metadataUrl,
+      metadataMapping: stream.mapping,
+    );
+    await _service.player.play();
+  }
 
-  // ── Test HLS — décommenter pour tester ──────────────────────────────────
-  // Antilles Média TV (vidéo HLS — audio OK, pas de métas musicales) :
-  // Future<void> _play() => _service
-  //   .setUrl(_hlsAmtvLive, stationName: 'Antilles Média TV')
-  //   .then((_) => _service.player.play());
+  // ── Variantes — remplacer le corps de _play() ci-dessus ───────────────────
   //
-  // France Inter HLS (audio avec tags ID3 timed metadata — titre + artiste) :
-  // Future<void> _play() => _service
-  //   .setUrl(_hlsFranceInter, stationName: 'France Inter')
-  //   .then((_) => _service.player.play());
-  //
-  // FIP Reggae HLS (audio avec tags ID3 — bonne source de test zouk/reggae) :
-  // Future<void> _play() => _service
-  //   .setUrl(_hlsFipReggae, stationName: 'FIP Reggae')
-  //   .then((_) => _service.player.play());
-
-  //
-  // FIP Reggae HLS (audio avec tags ID3 — bonne source de test zouk/reggae) :
-  // Future<void> _play() => _service
-  //   .setUrl(_hlsMusiqueOpera, stationName: 'France Musique Opéra')
-  //   .then((_) => _service.player.play());
-
-  // Avec logo station (fallback si pas de pochette) :
-  // Future<void> _play() => _service
-  //   .setUrl('https://guadeloupe.ice.infomaniak.ch/guadeloupe-128.mp3',
+  // Logo de station (mémorisé par le plugin ; le fallback dans la notification
+  // n'est pas encore implémenté) :
+  //   await _service.setUrl(
+  //     _streams['Guadeloupe 1ère']!.url,
   //     stationName:    'Guadeloupe 1ère',
   //     stationLogoUrl: 'https://mon-serveur.com/logos/guadeloupe1ere.png',
-  //   ).then((_) => _service.player.play());
+  //   );
   //
-  // Métis FM (REST JSON imbriqué) :
-  // Future<void> _play() => _service.setUrl(
-  //   'https://str0.creacast.com/metisfm.mp3',
-  //   stationName:     'Métis FM',
-  //   stationLogoUrl:  'https://mon-serveur.com/logos/metisfm.png',
-  //   metadataUrl:     'https://metis.fm/flux/metisfm/refresh.json?ck=0',
-  //   metadataMapping: _mappingMetis,
-  // ).then((_) => _service.player.play());
+  // Radio sans ICY, métadonnées par polling REST — Métis FM, JSON imbriqué :
+  //   await _service.setUrl(
+  //     'https://str0.creacast.com/metisfm.mp3',
+  //     stationName:     'Métis FM',
+  //     metadataUrl:     'https://metis.fm/flux/metisfm/refresh.json?ck=0',
+  //     metadataMapping: const MetadataMapping(
+  //       title:      '8.current_song.title',
+  //       artist:     '8.current_song.artist',
+  //       artworkUrl: '8.current_song.img',
+  //     ),
+  //   );
   //
-  // Sofaia AAC (ICY pur) :
-  // Future<void> _play() => _service
-  //   .setUrl('https://radiosofaia.ice.infomaniak.ch/radiosofaia-high.aac',
-  //     stationName:    'Radio Sofaia',
-  //     stationLogoUrl: 'https://mon-serveur.com/logos/sofaia.png',
-  //   ).then((_) => _service.player.play());
+  // Radio Paradise — pochette fournie directement par le champ 'cover' :
+  //   metadataMapping: const MetadataMapping(
+  //     title: 'title', artist: 'artist',
+  //     artworkUrl: 'cover', startTime: 'start_time',
+  //   )
+  //
+  // Chemin HLS : mettre _selected sur une entrée 'HLS — …'. Les métadonnées y
+  // viennent des tags ID3 in-band, pas d'IcyStreamReader.
 
   // ── État ──────────────────────────────────────────────────────────────────
 
@@ -283,7 +304,7 @@ class _RadioTestPageState extends State<RadioTestPage> {
       return Image.network(
         _metadata.artworkUrl!,
         width: 180, height: 180, fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => const Icon(Icons.radio, size: 80),
+        errorBuilder: (_, _, _) => const Icon(Icons.radio, size: 80),
       );
     }
     if (_metadata.artworkData != null) {
@@ -322,6 +343,9 @@ class _RadioTestPageState extends State<RadioTestPage> {
         style: const TextStyle(fontSize: 12, color: Colors.grey)),
   ]);
 
+  // Démonstration du time-shift — l'appel est commenté dans build() le temps
+  // que la fonctionnalité soit tranchée. Conservée comme référence d'API.
+  // ignore: unused_element
   Widget _buildTimeShift() {
     final pos = _position;
     if (pos is LivePosition) {

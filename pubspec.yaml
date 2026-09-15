@@ -1,13 +1,13 @@
 name: radio_service
 description: "A Flutter plugin for streaming internet radio with full metadata support, artwork resolution, equalizer, and background playback."
-version: 0.1.5
+version: 0.1.6
 homepage: https://github.com/gcimia/radio_service
 repository: https://github.com/gcimia/radio_service
 issue_tracker: https://github.com/gcimia/radio_service/issues
 
 environment:
-  sdk: ^3.12.0
-  flutter: ">=3.44.0"
+  sdk: ^3.13.0
+  flutter: ">=3.47.0"
 
 dependencies:
   flutter:
@@ -42,20 +42,20 @@ flutter:
   # adding or updating assets for this project.
   plugin:
     platforms:
+      # Seule plateforme réellement implémentée.
+      #
+      # iOS, macOS, Windows, Linux et le web ne sont volontairement PAS
+      # déclarés : leurs dossiers ne contiennent que le squelette généré par
+      # `flutter create` (getPlatformVersion et rien d'autre). Les déclarer
+      # ferait enregistrer un plugin qui ne répond à aucune méthode, et toute
+      # commande remonterait une MissingPluginException.
+      #
+      # Les dossiers ios/, macos/, windows/, linux/ et lib/radio_service_web.dart
+      # sont conservés tels quels : ils serviront de point de départ au portage.
+      # Il suffira de réintroduire l'entrée correspondante ici.
       android:
         package: com.dev.gcimia.radio_service
         pluginClass: RadioServicePlugin
-      ios:
-        pluginClass: RadioServicePlugin
-      linux:
-        pluginClass: RadioServicePlugin
-      macos:
-        pluginClass: RadioServicePlugin
-      windows:
-        pluginClass: RadioServicePluginCApi
-      web:
-        pluginClass: RadioServiceWeb
-        fileName: radio_service_web.dart
 
   # To add assets to your plugin package, add an assets section, like this:
   # assets:

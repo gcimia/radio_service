@@ -100,15 +100,17 @@ class _LruCache {
 class ArtworkCache {
   ArtworkCache({
     required int memoryCacheSize,
-    required Duration diskCacheDuration,
-    String? diskCacheDir,
-  })  : _lru = _LruCache(memoryCacheSize),
-        _diskCacheDuration = diskCacheDuration,
-        _diskCacheDir = diskCacheDir;
+    required this.diskCacheDuration,
+    this.diskCacheDir,
+  }) : _lru = _LruCache(memoryCacheSize);
 
   final _LruCache _lru;
-  final Duration _diskCacheDuration;
-  final String? _diskCacheDir;
+
+  /// Durée de validité d'une entrée du cache disque.
+  final Duration diskCacheDuration;
+
+  /// Répertoire du cache disque — null = répertoire par défaut de l'appli.
+  final String? diskCacheDir;
 
   Map<String, _Entry> _disk = {};
   bool _diskLoaded = false;
@@ -167,7 +169,7 @@ class ArtworkCache {
     if (url == null) return;
     final entry = _Entry(
       url: url,
-      expiresAt: DateTime.now().add(_diskCacheDuration),
+      expiresAt: DateTime.now().add(diskCacheDuration),
     );
     _lru.put(key, entry);
     await _loadDisk();
@@ -223,7 +225,7 @@ class ArtworkCache {
 
   Future<File> _cacheFile() async {
     if (_file != null) return _file!;
-    final dir = _diskCacheDir ?? (await getApplicationCacheDirectory()).path;
+    final dir = diskCacheDir ?? (await getApplicationCacheDirectory()).path;
     _file = File('$dir/radio_artwork_cache.json');
     return _file!;
   }

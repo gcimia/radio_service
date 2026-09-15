@@ -4,14 +4,16 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'radio_service'
-  s.version          = '0.0.1'
-  s.summary          = 'A new Flutter project.'
+  s.version          = '0.1.6'
+  s.summary          = 'Internet radio playback with ICY metadata, artwork and background audio.'
   s.description      = <<-DESC
-A new Flutter project.
+Flutter plugin for internet radio streaming. NOT YET IMPLEMENTED on this
+platform: the sources here are the generated skeleton, kept as a starting
+point for the port. The plugin only declares Android in its pubspec.yaml.
                        DESC
-  s.homepage         = 'http://example.com'
+  s.homepage         = 'https://github.com/gcimia/radio_service'
   s.license          = { :file => '../LICENSE' }
-  s.author           = { 'Your Company' => 'email@example.com' }
+  s.author           = { 'gcimia' => 'gcimia.dev@gmail.com' }
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
   s.dependency 'Flutter'

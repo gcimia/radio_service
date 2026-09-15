@@ -1,5 +1,4 @@
 import 'player_metadata.dart';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
