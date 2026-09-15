@@ -39,7 +39,10 @@ class RadioService {
 
   // ── Sous-services publics ──────────────────────────────────────────────────
 
-  final PlayerController    player;
+  /// Assigné dans le corps du constructeur — [PlayerController] reçoit un
+  /// rappel vers [_stopStream], ce qu'une liste d'initialisation ne permet pas.
+  late final PlayerController player;
+
   final EqualizerService    equalizer;
   final NotificationService notification;
   final BackgroundService   background;
@@ -53,7 +56,17 @@ class RadioService {
   final _metadataParser = MetadataParser();
 
   /// Compteur de génération — incrémenté à chaque nouveau titre musical.
+  /// Sert uniquement à écarter une pochette résolue pour un titre périmé.
   int _generation = 0;
+
+  /// Jeton de génération du FLUX — incrémenté à chaque [setUrl] et à chaque
+  /// [_stopStream]. Distinct de [_generation] (qui suit les titres musicaux).
+  ///
+  /// Chaque closure et chaque timer armé pour un flux capture le jeton en
+  /// vigueur et le compare avant d'agir. Sans lui, une closure survivant à un
+  /// changement de station pousse ses octets — ou son verdict d'erreur — dans
+  /// le flux de la station suivante.
+  int _streamGeneration = 0;
 
   /// Dernier titre+artiste émis — déduplication ICY.
   String? _lastEmittedKey;
@@ -102,20 +115,23 @@ class RadioService {
 
   // ── Flux d'état unifié ──────────────────────────────────────────────────────
   // Fusionne les états natifs (ExoPlayer via le canal d'événements) et les
-  // erreurs détectées côté Dart (indisponibilité réseau, watchdog premier octet).
+  // états détectés côté Dart (interruption réseau, watchdog premier octet).
   // L'app n'écoute que ce flux — elle reçoit donc aussi bien un PlayerError
-  // venant d'ExoPlayer qu'un PlayerError « radio indisponible » côté Dart.
+  // venant d'ExoPlayer qu'un PlayerInterrupted produit par la couche Dart.
   final _stateController = StreamController<PlayerState>.broadcast();
   StreamSubscription<PlayerState>? _nativeStateSub;
 
   // Watchdog « premier octet audio » — si aucun octet audio n'arrive après le
   // démarrage d'un flux ICY (serveur muet, lent, refus…), le flux est déclaré
-  // indisponible au lieu de laisser le loader tourner à l'infini.
+  // interrompu au lieu de laisser le loader tourner à l'infini. Avis pour
+  // l'interface uniquement : la reconnexion continue.
   static const _firstBytesTimeout = Duration(seconds: 15);
   Timer? _firstBytesTimer;
 
-  // Évite d'émettre/traiter l'indisponibilité deux fois (watchdog + onUnavailable).
-  bool _reportedUnavailable = false;
+  // Évite d'émettre l'interruption deux fois (watchdog + onUnavailable).
+  // Remis à false dès que des octets audio repartent : un épisode suivant
+  // doit pouvoir être signalé à son tour.
+  bool _reportedInterrupted = false;
 
   // Empêche une double libération (dispose appelé plusieurs fois).
   bool _disposed = false;
@@ -127,10 +143,13 @@ class RadioService {
     bool                  equalizerEnabled  = true,
     bool                  backgroundEnabled = true,
     bool                  autoResumeAfterFocusLoss = true,
-  })  : player       = PlayerController(),
-        equalizer    = EqualizerService(),
+  })  : equalizer    = EqualizerService(),
         notification = NotificationService(),
         background   = BackgroundService() {
+    // L'arrêt explicite coupe aussi la couche réseau Dart : c'est la seule
+    // chose qui met fin à la reconnexion automatique, désormais sans plafond.
+    player = PlayerController(onStop: _stopStream);
+
     if (artworkConfig.enabled) {
       _artworkResolver = ArtworkResolver(config: artworkConfig);
       _artworkResolver!.clearCache();
@@ -170,13 +189,19 @@ class RadioService {
     // Arrêt de tout ce qui était en cours
     await _stopStream();
 
+    // Jeton de CE flux. Il est pris APRÈS l'arrêt : si deux setUrl se
+    // chevauchent, chacun prend un jeton neuf et seul le dernier reste
+    // légitime — l'autre sortira à son prochain test de génération plutôt
+    // que d'écraser les champs partagés.
+    final generation = ++_streamGeneration;
+
     _lastEmittedKey   = null;
     _lastEmittedTitle = null;
     _generation       = 0;
     _stationName      = null;
     _stationLogoUrl       = null;
     _lastMusicArtworkData = null;
-    _reportedUnavailable  = false;
+    _reportedInterrupted  = false;
     _metadataParser.reset();
 
     // Effacement du cache artwork à chaque changement de radio
@@ -208,6 +233,9 @@ class RadioService {
     // Résolution des playlists (.pls, .m3u) et détection HLS
     final resolved = await PlaylistResolver.resolve(url);
 
+    // Premier point de suspension : un autre setUrl a pu passer entre-temps.
+    if (generation != _streamGeneration) return;
+
     if (resolved.isHls) {
       // ── Chemin HLS ─────────────────────────────────────────────────────────
       // ExoPlayer joue directement l'URL HLS via HlsMediaSource.
@@ -229,17 +257,32 @@ class RadioService {
       // et passe les bytes audio via le proxy local à ExoPlayer.
 
       // ── Démarrage du proxy audio ────────────────────────────────────────────
-      _proxy = AudioProxyServer();
-      await _proxy!.start();
+      // Le proxy et le lecteur sont manipulés par des variables LOCALES,
+      // capturées dans les closures. Celles-ci lisaient auparavant le champ
+      // `_proxy` : un lecteur périmé pouvait donc pousser ses octets dans le
+      // proxy de la station suivante, ou pousser dans une référence déjà
+      // remise à null par un arrêt en vol — ExoPlayer n'était alors plus
+      // alimenté et rendait un « source error » sur une station saine.
+      final proxy = AudioProxyServer();
+      await proxy.start();
+
+      // Deuxième point de suspension — même garde.
+      if (generation != _streamGeneration) {
+        await proxy.stop();
+        return;
+      }
+      _proxy = proxy;
 
       // ── DEBUG ────────────────────────────────────────────────────────────
-      debugPrint('[RadioService] proxy démarré: ${_proxy!.streamUrl}');
+      debugPrint('[RadioService] proxy démarré: ${proxy.streamUrl}');
       // ── FIN DEBUG ────────────────────────────────────────────────────────
 
       // ── Démarrage du lecteur ICY ────────────────────────────────────────────
-      _icyReader = IcyStreamReader();
+      final reader = IcyStreamReader();
+      _icyReader = reader;
 
-      _icyReader!.onMetadata = (icyMeta) {
+      reader.onMetadata = (icyMeta) {
+        if (generation != _streamGeneration) return;
         if (icyMeta.isHeader) {
           // Headers de connexion (station name, genre…)
           final data = <String, dynamic>{
@@ -270,31 +313,47 @@ class RadioService {
         }
       };
 
-      _icyReader!.onAudioBytes = (bytes) {
+      reader.onAudioBytes = (bytes) {
+        if (generation != _streamGeneration) return;
         // Premier octet audio reçu → le flux répond, on désarme le watchdog.
         if (_firstBytesTimer != null) {
           _firstBytesTimer!.cancel();
           _firstBytesTimer = null;
         }
-        _proxy?.pushAudioBytes(bytes);
+        // Des octets repartent → l'épisode d'interruption est clos et un
+        // épisode suivant pourra de nouveau être signalé. La sortie de
+        // PlayerInterrupted n'a pas besoin d'être émise ici : ExoPlayer
+        // réémet PlayerPlaying dès qu'il redécode.
+        _reportedInterrupted = false;
+        // Instance locale, jamais le champ.
+        proxy.pushAudioBytes(bytes);
         _proxyReceivingBytes = true;
         // Réarme le timer : un morceau long n'émet pas de StreamTitle pendant des minutes
         _resetSilenceTimer();
       };
 
-      _icyReader!.onError = (error) {
+      reader.onError = (error) {
+        if (generation != _streamGeneration) return;
         // ── DEBUG ──────────────────────────────────────────────────────────
         debugPrint('[RadioService] erreur flux: $error');
         // ── FIN DEBUG ──────────────────────────────────────────────────────
         // Erreur transitoire : IcyStreamReader retente encore. On ne signale
-        // l'indisponibilité qu'à l'épuisement (onUnavailable) ou via le watchdog.
+        // l'interruption qu'après un échec durable (onUnavailable) ou via le
+        // watchdog « premier octet ».
+        //
+        // Le proxy ne reçoit plus rien : sans cette ligne, le détecteur de
+        // silence voyait _proxyReceivingBytes encore à true et annonçait à
+        // l'UI un « flux silencieux » alors qu'il s'agit d'une coupure.
+        _proxyReceivingBytes = false;
       };
 
-      _icyReader!.onUnavailable = () {
-        _reportUnavailable('Radio indisponible');
+      reader.onUnavailable = () {
+        if (generation != _streamGeneration) return;
+        _reportInterrupted('reconnexions infructueuses');
       };
 
-      _icyReader!.onConnected = () {
+      reader.onConnected = () {
+        if (generation != _streamGeneration) return;
         // Démarre le timer de détection stream silencieux dès la connexion établie.
         // Réinitialisé à chaque bloc ICY reçu. Déclenche isSilent si aucun
         // StreamTitle n'arrive dans [_silenceTimeout] et que le proxy reçoit des bytes.
@@ -303,27 +362,33 @@ class RadioService {
       };
 
       // Démarre la connexion au flux — non-bloquant
-      _icyReader!.start(resolved.url);
+      reader.start(resolved.url);
 
-      // Watchdog : si aucun octet audio n'arrive dans le délai imparti,
-      // le flux est indisponible → on émet PlayerError au lieu de laisser
-      // l'UI sur un loader infini. Désarmé au premier octet (onAudioBytes).
+      // Watchdog : si aucun octet audio n'arrive dans le délai imparti, on
+      // émet PlayerInterrupted au lieu de laisser l'UI sur un loader infini.
+      // Désarmé au premier octet (onAudioBytes). Il ne coupe plus rien — le
+      // lecteur continue de retenter derrière.
       _firstBytesTimer?.cancel();
       _firstBytesTimer = Timer(_firstBytesTimeout, () {
+        if (generation != _streamGeneration) return;
         if (!_proxyReceivingBytes) {
-          _reportUnavailable('Radio indisponible (aucune donnée audio)');
+          _reportInterrupted(
+              'aucune donnée audio après ${_firstBytesTimeout.inSeconds}s');
         }
       });
 
       // ── Donne l'URL proxy à ExoPlayer ──────────────────────────────────────
       await RadioServicePlatform.instance.setUrl(
-        _proxy!.streamUrl,
+        proxy.streamUrl,
         stationName: _stationName,
         isHls:       false,
       );
     }
 
     // ── Polling REST optionnel ────────────────────────────────────────────────
+    // Dernier point de suspension (setUrl natif) — même garde.
+    if (generation != _streamGeneration) return;
+
     if (metadataUrl != null) {
       _poller = MetadataPoller(
         metadataUrl: metadataUrl,
@@ -473,6 +538,12 @@ class RadioService {
 
       // Dart télécharge les bytes — Kotlin les reçoit directement sans appel réseau
       final bytes = await _downloadImageBytes(url);
+
+      // Deuxième suspension : le titre a pu changer pendant le téléchargement.
+      // Sans ce test, la pochette d'un titre périmé s'installait comme
+      // fallback dans _lastMusicArtworkData et dans la notification.
+      if (_generation != generation) return;
+
       if (bytes != null) _lastMusicArtworkData = bytes;
 
       // Émission vers l'UI avec l'URL (l'UI charge l'image elle-même)
@@ -540,42 +611,93 @@ class RadioService {
     ));
   }
 
-  // ── Indisponibilité ─────────────────────────────────────────────────────────
+  // ── Interruption ────────────────────────────────────────────────────────────
 
-  /// Signale à l'UI que le flux est durablement indisponible et coupe la
-  /// couche réseau Dart. Idempotent : déclenché soit par le watchdog
-  /// (premier octet), soit par IcyStreamReader.onUnavailable.
-  /// (Le nettoyage complet des ressources natives sera traité au groupe D.)
-  void _reportUnavailable(String message) {
-    if (_reportedUnavailable) return;
-    _reportedUnavailable = true;
+  /// Signale à l'UI que le flux est interrompu — et rien d'autre.
+  ///
+  /// Déclenché soit par le watchdog « premier octet », soit par
+  /// `IcyStreamReader.onUnavailable`. Idempotent par épisode : le drapeau est
+  /// remis à false dès que des octets audio repartent.
+  ///
+  /// Cette méthode NE COUPE PLUS le flux. L'ancienne version appelait
+  /// `_stopStream()` en fire-and-forget, dont les écritures de champs
+  /// s'exécutaient après ses `await` : l'arrêt reprenait la main une fois la
+  /// station suivante démarrée et arrêtait SON proxy. ExoPlayer n'était plus
+  /// alimenté et rendait un « source error » sur une station parfaitement
+  /// saine — « la source error bloque les autres radios ».
+  ///
+  /// Et sur le fond : une coupure réseau n'est pas une fin de vie. Le lecteur
+  /// retente indéfiniment tant que la personne n'a pas arrêté ; couper ici
+  /// garantissait au contraire que rien ne repartirait jamais tout seul.
+  void _reportInterrupted(String reason) {
+    if (_reportedInterrupted) return;
+    _reportedInterrupted = true;
 
     _firstBytesTimer?.cancel();
     _firstBytesTimer = null;
 
-    if (!_stateController.isClosed) {
-      _stateController.add(PlayerError(message));
-    }
+    // ── DEBUG ────────────────────────────────────────────────────────────────
+    debugPrint('[RadioService] flux interrompu — $reason '
+        '(reconnexion automatique en cours)');
+    // ── FIN DEBUG ────────────────────────────────────────────────────────────
 
-    // Coupe le reader + le proxy pour ne plus consommer le réseau inutilement.
-    // Fire-and-forget : on n'attend pas la fin de l'arrêt asynchrone.
-    _stopStream();
+    if (!_stateController.isClosed) {
+      _stateController.add(PlayerInterrupted());
+    }
+  }
+
+  // ── Reprise forcée ──────────────────────────────────────────────────────────
+
+  /// Raccourcit le recul en cours et retente immédiatement.
+  ///
+  /// À appeler quand l'hôte SAIT que le réseau est revenu — il le sait avant
+  /// nous. Le partage de responsabilité est le suivant : le plugin possède la
+  /// connexion, donc il possède la reconnexion et retente seul, indéfiniment ;
+  /// l'application possède la connaissance du réseau, donc elle peut
+  /// RACCOURCIR l'attente. Elle ne la remplace pas — si [retryNow] n'est
+  /// jamais appelé, la lecture repart quand même, simplement plus tard.
+  ///
+  /// Sans effet sur les flux HLS (ExoPlayer y gère sa propre connexion) et
+  /// sans effet si aucun flux n'est chargé.
+  Future<void> retryNow() async {
+    _icyReader?.retryNow();
   }
 
   // ── Arrêt du flux ──────────────────────────────────────────────────────────
 
+  /// Coupe la couche réseau Dart : polling REST, lecteur ICY, proxy audio.
+  ///
+  /// La règle appliquée ici vaut pour les trois cycles de vie asynchrones du
+  /// plugin : **on détache avant d'attendre, et on n'écrit jamais un champ
+  /// partagé après un `await`.**
+  ///
+  /// L'ancienne version écrivait `_icyReader = null` et `_proxy = null` APRÈS
+  /// ses `await`. Un arrêt parti en vol pendant un incident réseau reprenait
+  /// la main une fois la station suivante démarrée, relisait les champs — qui
+  /// pointaient alors sur le proxy et le lecteur NEUFS — et les arrêtait.
   Future<void> _stopStream() async {
+    // Incrémenté avant tout await : toute closure et tout timer restés en vol
+    // deviennent périmés dès cette ligne.
+    _streamGeneration++;
+
     // Arrêt des timers avant toute chose
     _stopSilenceTimer();
     _firstBytesTimer?.cancel();
     _firstBytesTimer = null;
     _proxyReceivingBytes = false;
-    _poller?.stop();
-    _poller = null;
-    await _icyReader?.stop();
+
+    // Détachement : les champs sont remis à null AVANT le premier await,
+    // puis on n'opère plus que sur les références locales.
+    final poller = _poller;
+    final reader = _icyReader;
+    final proxy  = _proxy;
+    _poller    = null;
     _icyReader = null;
-    await _proxy?.stop();
-    _proxy = null;
+    _proxy     = null;
+
+    poller?.stop();
+    await reader?.stop();
+    await proxy?.stop();
   }
 
   // ── Nettoyage ──────────────────────────────────────────────────────────────

@@ -46,11 +46,27 @@ class AudioProxyServer {
   }
 
   /// Arrête le serveur et ferme toutes les connexions.
+  ///
+  /// On détache avant d'attendre : les champs sont remis à null AVANT le
+  /// premier await, puis on n'opère que sur les références locales. Un arrêt
+  /// resté en suspens ne peut donc plus fermer le serveur qui l'a remplacé —
+  /// c'est exactement ce qui provoquait un « source error » sur une station
+  /// saine après un changement de radio pendant une coupure réseau.
   Future<void> stop() async {
-    await _currentRequest?.response.close().catchError((_) {});
+    final server  = _server;
+    final request = _currentRequest;
+    _server         = null;
     _currentRequest = null;
-    await _server?.close(force: true);
-    _server = null;
+
+    // La file n'était jamais fermée : le StreamController survivait à l'arrêt
+    // du serveur, avec son abonné, pour chaque proxy créé.
+    if (!_queue.isClosed) {
+      try { await _queue.close(); } catch (_) {}
+    }
+    if (request != null) {
+      try { await request.response.close(); } catch (_) {}
+    }
+    try { await server?.close(force: true); } catch (_) {}
 
     // ── DEBUG ──────────────────────────────────────────────────────────────
     debugPrint('[AudioProxyServer] arrêté');
@@ -121,6 +137,8 @@ class AudioProxyServer {
     debugPrint('[AudioProxyServer] ExoPlayer déconnecté');
     // ── FIN DEBUG ──────────────────────────────────────────────────────────
 
-    _currentRequest = null;
+    // Écriture après await : on ne remet le champ à null que s'il pointe
+    // encore sur NOTRE requête. ExoPlayer peut s'être reconnecté entre-temps.
+    if (identical(_currentRequest, request)) _currentRequest = null;
   }
 }

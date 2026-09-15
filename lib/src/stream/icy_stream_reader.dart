@@ -107,24 +107,59 @@ enum IcyStreamType { mp3, aac, ogg, opus, flac, unknown }
 
 class IcyStreamReader {
   IcyStreamReader({
-    this.userAgent      = 'RadioService/1.0',
-    this.connectTimeout = const Duration(seconds: 10),
-    this.reconnectDelay = const Duration(seconds: 3),
-    this.maxReconnects  = 5,
+    this.userAgent        = 'RadioService/1.0',
+    this.connectTimeout   = const Duration(seconds: 10),
+    this.backoffDelays    = defaultBackoffDelays,
+    this.interruptedAfter = const Duration(seconds: 15),
   });
 
-  final String   userAgent;
-  final Duration connectTimeout;
-  final Duration reconnectDelay;
-  final int      maxReconnects;
+  /// Recul entre deux tentatives : croissant, puis borné.
+  /// La dernière valeur est répétée indéfiniment. On ne martèle pas un réseau
+  /// absent, et on ne fait pas attendre une minute quand il revient au bout de
+  /// trois secondes.
+  static const List<Duration> defaultBackoffDelays = <Duration>[
+    Duration(seconds:  1),
+    Duration(seconds:  2),
+    Duration(seconds:  4),
+    Duration(seconds:  8),
+    Duration(seconds: 15),
+  ];
+
+  final String         userAgent;
+  final Duration       connectTimeout;
+  final List<Duration> backoffDelays;
+
+  /// Durée d'échec continu au bout de laquelle [onUnavailable] est appelé.
+  /// Ce n'est pas un abandon : la boucle continue de retenter après.
+  final Duration interruptedAfter;
 
   // ── État interne ──────────────────────────────────────────────────────────
 
-  String?                        _url;
-  bool                           _running = false;
-  int                            _metaint = 0;
-  HttpClient?                    _client;
+  bool _running = false;
+
+  /// Jeton de génération — incrémenté à chaque [start] et à chaque [stop].
+  ///
+  /// Chaque reprise asynchrone (fin de recul, callback de flux) compare le
+  /// jeton qu'elle a capturé au démarrage de sa boucle à celui-ci avant
+  /// d'agir. Un booléen partagé comme `_running` ne sait pas distinguer
+  /// « je suis la bonne boucle » de « la boucle a redémarré sans moi » :
+  /// une reprise réveillée juste après `start()` le voyait à `true` et
+  /// repartait sur la nouvelle URL, en parallèle de la boucle légitime.
+  int _generation = 0;
+
   StreamSubscription<List<int>>? _sub;
+  HttpClient?                    _client;
+
+  /// Attente de fin de flux en cours. Annuler l'abonnement ne déclenche NI
+  /// onDone NI onError : sans ce point de sortie, un [stop] pendant la lecture
+  /// laissait `_readStream` suspendu pour toujours — boucle bloquée, socket
+  /// et abonnement jamais libérés.
+  Completer<void>? _readCompleter;
+
+  // Attente de recul en cours — [retryNow] la raccourcit.
+  Timer?           _backoffTimer;
+  Completer<void>? _backoffWaiter;
+  bool             _immediateRetryRequested = false;
 
   // ── Callbacks ─────────────────────────────────────────────────────────────
 
@@ -135,7 +170,7 @@ class IcyStreamReader {
   /// Chunk de bytes audio pur à transmettre au proxy.
   void Function(Uint8List bytes)? onAudioBytes;
 
-  /// Erreur réseau ou de parsing.
+  /// Erreur réseau ou de parsing — transitoire, la reconnexion suit.
   void Function(String error)? onError;
 
   /// Connexion établie.
@@ -144,89 +179,227 @@ class IcyStreamReader {
   /// Lecture arrêtée.
   void Function()? onDisconnected;
 
-  /// Toutes les tentatives de (re)connexion ont échoué — flux durablement
-  /// indisponible. Distinct de [onError] (transitoire, on retente encore).
+  /// La (re)connexion échoue depuis [interruptedAfter] — le flux est
+  /// durablement interrompu. Ce n'est PAS un abandon : la boucle continue
+  /// de retenter tant que [stop] n'a pas été appelé. C'est un avis destiné
+  /// à l'interface, appelé une seule fois par épisode d'interruption.
   void Function()? onUnavailable;
 
   // ── API publique ──────────────────────────────────────────────────────────
 
   Future<void> start(String url) async {
     await stop();
-    _url     = url;
+    // Après l'await : on prend un jeton neuf. Si un autre start() s'est
+    // glissé entre-temps, c'est le dernier qui gagne et la boucle de l'autre
+    // sortira à son prochain test de génération.
+    final generation = ++_generation;
     _running = true;
-    _connect(reconnectCount: 0);
+    unawaited(_runLoop(generation, url));
   }
 
   Future<void> stop() async {
+    // Le jeton est incrémenté AVANT tout await : toute reprise en vol
+    // (recul, callback de flux) devient périmée dès cette ligne.
+    _generation++;
     _running = false;
-    await _sub?.cancel();
-    _sub = null;
-    _client?.close(force: true);
-    _client = null;
+
+    // On détache avant d'attendre — les champs sont remis à null tout de
+    // suite, puis on n'opère que sur les références locales. Un arrêt en vol
+    // ne peut donc plus fermer la connexion qui l'a remplacé.
+    final sub     = _sub;
+    final client  = _client;
+    final reading = _readCompleter;
+    _sub           = null;
+    _client        = null;
+    _readCompleter = null;
+
+    _cancelBackoff();
+    if (reading != null && !reading.isCompleted) reading.complete();
+
+    await sub?.cancel();
+    client?.close(force: true);
     onDisconnected?.call();
+  }
+
+  /// Raccourcit le recul en cours et retente immédiatement.
+  ///
+  /// À appeler quand l'hôte SAIT que le réseau est revenu — il le sait avant
+  /// nous. Le compteur de recul repart à zéro. Sans effet si la lecture est
+  /// arrêtée. Si une tentative est déjà en vol, la demande est mémorisée et
+  /// consommée juste après son échec, sans attendre le recul.
+  void retryNow() {
+    if (!_running) return;
+
+    // ── DEBUG ────────────────────────────────────────────────────────────────
+    debugPrint('[IcyStreamReader] retryNow — recul raccourci');
+    // ── FIN DEBUG ────────────────────────────────────────────────────────────
+
+    _immediateRetryRequested = true;
+    _cancelBackoff();
   }
 
   bool get isRunning => _running;
 
-  // ── Connexion HTTP ────────────────────────────────────────────────────────
+  // ── Boucle de connexion ───────────────────────────────────────────────────
 
-  Future<void> _connect({required int reconnectCount}) async {
-    if (!_running || _url == null) return;
+  /// Boucle unique : une seule chaîne de connexion existe par génération.
+  ///
+  /// L'ancienne implémentation se rappelait elle-même (`_connect` →
+  /// `Future.delayed` → `_connect`, et `_readStream` → `_connect`), ce qui
+  /// laissait deux chaînes coexister dès qu'on changeait de station pendant
+  /// un incident réseau. Une boucle `while` gardée par le jeton de génération
+  /// supprime le problème par construction.
+  Future<void> _runLoop(int generation, String url) async {
+    int       attempt             = 0;     // échecs consécutifs sans octet reçu
+    DateTime? interruptedSince;            // début de l'épisode en cours
+    bool      interruptionReported = false;
 
+    while (generation == _generation) {
+      bool gotBytes = false;
+
+      try {
+        gotBytes = await _attempt(generation, url);
+      } catch (e) {
+        // Une génération plus récente signifie que l'échec vient de NOTRE
+        // propre arrêt (client fermé de force) : ce n'est pas une erreur à
+        // remonter à l'hôte.
+        if (generation != _generation) return;
+        // ── DEBUG ────────────────────────────────────────────────────────────
+        debugPrint('[IcyStreamReader] erreur: $e');
+        // ── FIN DEBUG ────────────────────────────────────────────────────────
+        onError?.call(e.toString());
+      }
+
+      if (generation != _generation) return;
+
+      if (gotBytes) {
+        // La session a réellement diffusé de l'audio : qu'elle se soit
+        // terminée proprement (onDone) ou en erreur (onError), c'est un
+        // incident neuf. Le recul repart de zéro et l'épisode est clos.
+        attempt              = 0;
+        interruptedSince     = null;
+        interruptionReported = false;
+      } else {
+        attempt++;
+        final since = interruptedSince ??= DateTime.now();
+        if (!interruptionReported &&
+            DateTime.now().difference(since) >= interruptedAfter) {
+          interruptionReported = true;
+          // ── DEBUG ──────────────────────────────────────────────────────────
+          debugPrint('[IcyStreamReader] interrompu depuis '
+              '${interruptedAfter.inSeconds}s — on continue de retenter');
+          // ── FIN DEBUG ──────────────────────────────────────────────────────
+          onUnavailable?.call();
+        }
+      }
+
+      // Demande d'essai immédiat arrivée pendant la tentative : on repart
+      // sans attendre, compteur de recul remis à zéro.
+      if (_immediateRetryRequested) {
+        _immediateRetryRequested = false;
+        attempt = 0;
+        continue;
+      }
+
+      final delay = _backoffFor(attempt);
+
+      // ── DEBUG ──────────────────────────────────────────────────────────────
+      debugPrint('[IcyStreamReader] reconnexion dans ${delay.inSeconds}s '
+          '(tentative ${attempt + 1})');
+      // ── FIN DEBUG ──────────────────────────────────────────────────────────
+
+      await _waitBackoff(delay);
+      if (generation != _generation) return;
+
+      if (_immediateRetryRequested) {
+        _immediateRetryRequested = false;
+        attempt = 0;
+      }
+    }
+  }
+
+  /// Recul applicable après [attempt] échecs consécutifs.
+  /// `attempt == 0` (session réussie qui vient de se terminer) → première
+  /// valeur de la table ; au-delà de la table, la dernière valeur est répétée.
+  Duration _backoffFor(int attempt) {
+    if (backoffDelays.isEmpty) return const Duration(seconds: 1);
+    final index = (attempt - 1).clamp(0, backoffDelays.length - 1);
+    return backoffDelays[index];
+  }
+
+  // ── Attente de recul interruptible ────────────────────────────────────────
+
+  Future<void> _waitBackoff(Duration delay) {
+    _cancelBackoff();
+    final waiter = Completer<void>();
+    _backoffWaiter = waiter;
+    _backoffTimer  = Timer(delay, () {
+      if (!waiter.isCompleted) waiter.complete();
+    });
+    return waiter.future;
+  }
+
+  /// Réveille immédiatement l'attente en cours, s'il y en a une.
+  /// La boucle réveillée retestera son jeton de génération avant d'agir.
+  void _cancelBackoff() {
+    _backoffTimer?.cancel();
+    _backoffTimer = null;
+
+    final waiter = _backoffWaiter;
+    _backoffWaiter = null;
+    if (waiter != null && !waiter.isCompleted) waiter.complete();
+  }
+
+  // ── Une tentative de connexion ────────────────────────────────────────────
+
+  /// Retourne true si la session a diffusé au moins un octet audio.
+  /// Lève si la connexion elle-même a échoué (DNS, refus, HTTP ≠ 200).
+  Future<bool> _attempt(int generation, String url) async {
     // ── DEBUG ────────────────────────────────────────────────────────────────
-    debugPrint('[IcyStreamReader] connexion → $_url');
+    debugPrint('[IcyStreamReader] connexion → $url');
     // ── FIN DEBUG ────────────────────────────────────────────────────────────
 
-    try {
-      _client = HttpClient()..connectionTimeout = connectTimeout;
+    final client = HttpClient()..connectionTimeout = connectTimeout;
 
-      final request = await _client!.getUrl(Uri.parse(_url!));
+    // Chaque tentative créait un HttpClient sans fermer le précédent, et
+    // stop() n'en fermait qu'un. On ferme celui de la tentative précédente.
+    final previous = _client;
+    _client = client;
+    previous?.close(force: true);
+
+    try {
+      final request = await client.getUrl(Uri.parse(url));
       request.headers
         ..set('Icy-MetaData', '1')
-        ..set('User-Agent', userAgent)
-        ..set('Accept', '*/*')
-        ..set('Connection', 'keep-alive');
+        ..set('User-Agent',   userAgent)
+        ..set('Accept',       '*/*')
+        ..set('Connection',   'keep-alive');
 
       final response = await request.close();
+      if (generation != _generation) return false;
 
       if (response.statusCode != 200) {
         throw Exception('HTTP ${response.statusCode}');
       }
 
-      final headerMeta = _parseResponseHeaders(response);
+      final (headerMeta, metaint) = _parseResponseHeaders(response);
 
-      // ── DEBUG ────────────────────────────────────────────────────────────
+      // ── DEBUG ──────────────────────────────────────────────────────────────
       debugPrint('[IcyStreamReader] connecté — '
           'type:${headerMeta.contentType} '
-          'metaint:$_metaint '
+          'metaint:$metaint '
           'station:${headerMeta.stationName}');
-      // ── FIN DEBUG ────────────────────────────────────────────────────────
+      // ── FIN DEBUG ──────────────────────────────────────────────────────────
 
       onConnected?.call();
       onMetadata?.call(headerMeta);
 
-      await _readStream(response);
-
-    } on Exception catch (e) {
-      // ── DEBUG ────────────────────────────────────────────────────────────
-      debugPrint('[IcyStreamReader] erreur: $e');
-      // ── FIN DEBUG ────────────────────────────────────────────────────────
-
-      onError?.call(e.toString());
-
-      if (_running && reconnectCount < maxReconnects) {
-        // ── DEBUG ──────────────────────────────────────────────────────────
-        debugPrint('[IcyStreamReader] reconnexion dans '
-            '${reconnectDelay.inSeconds}s '
-            '(tentative ${reconnectCount + 1}/$maxReconnects)');
-        // ── FIN DEBUG ──────────────────────────────────────────────────────
-        await Future.delayed(reconnectDelay);
-        _connect(reconnectCount: reconnectCount + 1);
-      } else if (_running) {
-        // Plus de tentatives — flux durablement indisponible.
-        debugPrint('[IcyStreamReader] indisponible — $maxReconnects tentatives épuisées');
-        onUnavailable?.call();
-      }
+      return await _readStream(generation, response, metaint);
+    } finally {
+      // On ne remet le champ à null que s'il pointe encore sur NOTRE client :
+      // une génération plus récente a pu le remplacer entre-temps.
+      if (identical(_client, client)) _client = null;
+      client.close(force: true);
     }
   }
 
@@ -245,9 +418,13 @@ class IcyStreamReader {
     }
   }
 
-  IcyMetadata _parseResponseHeaders(HttpClientResponse response) {
+  /// Retourne les métadonnées de header ET le `metaint` de CETTE réponse.
+  /// Le metaint était un champ d'instance : deux connexions concurrentes
+  /// pouvaient se le disputer et désaligner la séparation audio/métadonnées.
+  (IcyMetadata, int) _parseResponseHeaders(HttpClientResponse response) {
     String? stationName, stationGenre, stationUrl, contentType;
     int?    bitrate;
+    int     metaint = 0;
 
     response.headers.forEach((name, values) {
       final v = _fixEncoding(values.first);
@@ -256,40 +433,61 @@ class IcyStreamReader {
         case 'icy-genre':   stationGenre = v;
         case 'icy-url':     stationUrl   = v;
         case 'icy-br':      bitrate      = int.tryParse(v);
-        case 'icy-metaint': _metaint     = int.tryParse(v) ?? 0;
+        case 'icy-metaint': metaint      = int.tryParse(v) ?? 0;
         case 'content-type':
           contentType = v.split(';').first.trim();
       }
     });
 
-    return IcyMetadata(
-      stationName:  stationName,
-      stationGenre: stationGenre,
-      stationUrl:   stationUrl,
-      contentType:  contentType,
-      bitrate:      bitrate,
-      isHeader:     true,
+    return (
+      IcyMetadata(
+        stationName:  stationName,
+        stationGenre: stationGenre,
+        stationUrl:   stationUrl,
+        contentType:  contentType,
+        bitrate:      bitrate,
+        isHeader:     true,
+      ),
+      metaint,
     );
   }
 
   // ── Lecture du flux — séparation audio / blocs ICY ───────────────────────
 
-  Future<void> _readStream(HttpClientResponse response) async {
+  /// Lit le flux jusqu'à sa fin ou son erreur. Ne lève jamais : une coupure
+  /// en cours de flux et une fin de flux propre reçoivent le même traitement
+  /// (voir la boucle), seule la valeur de retour distingue une session qui a
+  /// diffusé de l'audio d'une session vide.
+  Future<bool> _readStream(
+    int                generation,
+    HttpClientResponse response,
+    int                metaint,
+  ) async {
     final buffer       = _ByteBuffer();
-    int   bytesToAudio = _metaint;
+    int   bytesToAudio = metaint;
+    bool  gotBytes     = false;
     final completer    = Completer<void>();
 
-    _sub = response.listen(
-          (rawChunk) {
-        if (!_running) return;
+    void emitAudio(Uint8List bytes) {
+      if (bytes.isEmpty) return;
+      gotBytes = true;
+      onAudioBytes?.call(bytes);
+    }
+
+    final sub = response.listen(
+      (rawChunk) {
+        // Garde de génération, et non plus `_running` : un flux orphelin ne
+        // doit pas pousser ses octets dans le proxy de la station suivante.
+        if (generation != _generation) return;
+
         final chunk = rawChunk is Uint8List
             ? rawChunk
             : Uint8List.fromList(rawChunk);
         buffer.add(chunk);
 
         // Flux sans métadonnées ICY — tout est audio
-        if (_metaint == 0) {
-          onAudioBytes?.call(buffer.consume(buffer.length));
+        if (metaint == 0) {
+          emitAudio(buffer.consume(buffer.length));
           return;
         }
 
@@ -299,7 +497,7 @@ class IcyStreamReader {
             final take = buffer.length < bytesToAudio
                 ? buffer.length
                 : bytesToAudio;
-            onAudioBytes?.call(buffer.consume(take));
+            emitAudio(buffer.consume(take));
             bytesToAudio -= take;
           } else {
             if (buffer.length < 1) break;
@@ -308,7 +506,7 @@ class IcyStreamReader {
 
             if (metaLength == 0) {
               buffer.consume(1);
-              bytesToAudio = _metaint;
+              bytesToAudio = metaint;
               continue;
             }
 
@@ -317,7 +515,7 @@ class IcyStreamReader {
             buffer.consume(1);
             final metaBytes = buffer.consume(metaLength);
             _parseIcyBlock(metaBytes);
-            bytesToAudio = _metaint;
+            bytesToAudio = metaint;
           }
         }
       },
@@ -327,21 +525,41 @@ class IcyStreamReader {
         // ── FIN DEBUG ──────────────────────────────────────────────────────
         if (!completer.isCompleted) completer.complete();
       },
-      onError: (e) {
+      onError: (Object e) {
         // ── DEBUG ──────────────────────────────────────────────────────────
         debugPrint('[IcyStreamReader] erreur flux: $e');
         // ── FIN DEBUG ──────────────────────────────────────────────────────
-        if (!completer.isCompleted) completer.completeError(e as Object);
+        if (!completer.isCompleted) completer.completeError(e);
       },
       cancelOnError: true,
     );
 
-    await completer.future;
-
-    if (_running) {
-      await Future.delayed(reconnectDelay);
-      _connect(reconnectCount: 0);
+    // Dernier contrôle avant de publier les champs : un stop() a pu passer
+    // pendant l'établissement de la connexion. Publier ici écraserait le
+    // détachement qu'il vient de faire, et la lecture resterait suspendue
+    // pour toujours — abonnement et socket jamais libérés.
+    if (generation != _generation) {
+      await sub.cancel();
+      return false;
     }
+
+    _sub           = sub;
+    _readCompleter = completer;
+
+    try {
+      await completer.future;
+    } catch (e) {
+      // Coupure en cours de flux : même traitement qu'une fin de flux, la
+      // boucle retentera. On se contente d'informer l'hôte — sauf si la
+      // coupure vient de notre propre arrêt.
+      if (generation == _generation) onError?.call(e.toString());
+    } finally {
+      if (identical(_sub, sub))                 _sub           = null;
+      if (identical(_readCompleter, completer)) _readCompleter = null;
+      await sub.cancel();
+    }
+
+    return gotBytes;
   }
 
   // ── Parsing d'un bloc ICY inline ─────────────────────────────────────────

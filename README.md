@@ -23,7 +23,7 @@ Built for Android (iOS support planned). Handles ICY streams, SHOUTcast, AAC, MP
 
 ```yaml
 dependencies:
-  radio_service: ^0.1.4
+  radio_service: ^0.1.5
 ```
 
 ---
@@ -85,8 +85,9 @@ service.metadataStream.listen((metadata) {
 
 // Listen to player state
 service.stateStream.listen((state) {
-  if (state is PlayerPlaying) print('Playing');
-  if (state is PlayerError)   print('Error: ${state.message}');
+  if (state is PlayerPlaying)     print('Playing');
+  if (state is PlayerInterrupted) print('Reconnecting…');
+  if (state is PlayerError)       print('Error: ${state.message}');
 });
 
 // Dispose when done
@@ -227,15 +228,50 @@ service.stateStream.listen((state) {
     case PlayerPlaying():    // Audio playing
     case PlayerPaused():     // Paused
     case PlayerStopped():    // Stopped
+    case PlayerInterrupted():// Interrupted — the plugin is reconnecting
     case PlayerError(:final message): // Error
   }
 });
 ```
 
-`PlayerError` is emitted when the stream is unavailable: connection refused,
-HTTP error, DNS failure, playback error — or when no audio data arrives within
-15 seconds of connecting (unreachable station watchdog). The UI should handle
-this state to stop any loading indicator and inform the user.
+`PlayerState` is a sealed class: adding a member is a breaking change on
+purpose. An exhaustive `switch` in your app stops compiling, which is where
+you want to find out — not on the user's screen.
+
+`PlayerInterrupted` means the Dart layer can no longer feed the stream:
+network outage, station momentarily unreachable, or no audio byte received
+within 15 seconds of connecting. **It is not an error and not a stop.** The
+plugin keeps reconnecting on its own, indefinitely, for as long as playback
+has not been stopped. Show "reconnecting", keep the station selected, and do
+not clear the UI. Leaving the state needs no dedicated event: `PlayerPlaying`
+is emitted again as soon as audio flows.
+
+`PlayerError` is emitted for a playback error reported by the native player.
+Since 0.1.5 a network outage no longer produces it.
+
+---
+
+## Reconnection
+
+The plugin owns the connection, so it owns the reconnection.
+
+- **No retry cap.** It reconnects for as long as the listener has not stopped
+  playback.
+- **Bounded increasing backoff**: 1 s, 2 s, 4 s, 8 s, then 15 s repeated.
+- A mid-stream drop and a clean end of stream are treated identically.
+- `player.stop()` is what ends it — it stops the Dart networking layer as well
+  as native playback.
+
+Your app knows the network is back before the plugin does. If you have a
+connectivity module, shorten the wait:
+
+```dart
+connectivity.onRestored.listen((_) => service.retryNow());
+```
+
+`retryNow()` shortens the current backoff and reconnects immediately. It is
+strictly an optimisation — without it playback still recovers, just later.
+It has no effect on HLS streams, where ExoPlayer owns the connection.
 
 ### PlayerMetadata
 

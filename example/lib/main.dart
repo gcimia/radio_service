@@ -237,6 +237,7 @@ class _RadioTestPageState extends State<RadioTestPage> {
     PlayerPlaying()             => 'Lecture en cours',
     PlayerPaused()              => 'En pause',
     PlayerStopped()             => 'Arrêté',
+    PlayerInterrupted()         => 'Reconnexion…',
     PlayerError(:final message) => 'Erreur : $message',
   };
 

@@ -3,6 +3,99 @@
   Le fichier de référence pour pub.dev est CHANGELOG.md (anglais).
 -->
 
+## 0.1.5
+
+### RUPTURE
+* Nouveau membre `PlayerInterrupted` dans la classe scellée `PlayerState`.
+  Tout `switch` exhaustif sur `PlayerState` dans l'application hôte **cesse de
+  compiler** tant que le nouveau cas n'est pas traité. C'est voulu : l'échec
+  se produit à la compilation et non à l'écran chez la personne. À traiter
+  comme « reconnexion en cours » — ce n'est ni un arrêt demandé, ni une
+  station cassée.
+* Les hôtes doivent passer leur dépendance en `v0.1.5` puis lancer
+  `flutter pub get` (le cache git de pub est agressif : au besoin
+  `flutter pub cache repair`, ou supprimer l'entrée dans `PubCache/git/`).
+
+### Corrigé — le verrou « source error » après une coupure réseau
+* Un arrêt de flux resté en vol pouvait annuler le flux qui l'avait remplacé.
+  `_stopStream()` écrivait ses champs partagés (`_icyReader`, `_proxy`)
+  *après* ses `await` : un arrêt déclenché pendant un incident réseau
+  reprenait la main une fois la station suivante démarrée — et arrêtait ce
+  proxy tout neuf. ExoPlayer n'était plus alimenté et rendait un
+  `source error` sur une station parfaitement saine. C'est le « la source
+  error bloque les autres radios » signalé. Les champs partagés sont
+  désormais détachés avant le premier `await`.
+* Deux boucles de reconnexion pouvaient tourner en parallèle.
+  `IcyStreamReader` se rappelait lui-même via `Future.delayed` et en fin de
+  flux, gardé par le seul booléen partagé `_running` ; une reprise réveillée
+  juste après `start()` le voyait à `true`, se croyait légitime et se
+  reconnectait — sur l'URL de la *nouvelle* station, en parallèle de la vraie
+  boucle. Les deux écrivaient `_sub` et `_client`, et l'orpheline continuait
+  de pousser ses octets dans le proxy. Le lecteur exécute désormais une boucle
+  unique, gardée par un jeton de génération que chaque reprise asynchrone et
+  chaque callback compare avant d'agir.
+* Les closures de `RadioService` (`onAudioBytes`, `onMetadata`, `onConnected`,
+  `onUnavailable`, watchdog premier octet) lisaient le champ partagé `_proxy`
+  au lieu de l'instance pour laquelle elles avaient été créées : un lecteur
+  périmé pouvait donc pousser dans le proxy de la station suivante. Elles
+  capturent maintenant l'instance de proxy et un jeton de génération de flux.
+* `AudioProxyServer` présentait le même motif d'écriture tardive dans
+  `stop()`, et `_handleRequest()` pouvait remettre à null un
+  `_currentRequest` appartenant à une connexion plus récente.
+* La pochette résolue pouvait installer l'image d'un titre périmé comme
+  fallback de notification quand le téléchargement survivait au titre.
+
+### Modifié — politique de reconnexion
+* **Plus de plafond de tentatives.** Le plugin se reconnecte tant que la
+  personne n'a pas arrêté la lecture. L'ancienne politique abandonnait
+  définitivement après 5 tentatives (15 à 65 secondes) — moins qu'un tunnel,
+  qu'un ascenseur ou qu'un changement de cellule, et plus rien ne retentait
+  ensuite.
+* **Recul croissant et borné** : 1 s, 2 s, 4 s, 8 s, puis 15 s répété. On ne
+  martèle pas un réseau absent, et on ne fait pas attendre une minute quand il
+  revient au bout de trois secondes.
+* `onError` (coupure en cours de flux) et `onDone` (fin de flux propre)
+  reçoivent désormais le même traitement. La dissymétrie précédente — une
+  coupure comptait dans le plafond, une fin propre remettait le compteur à
+  zéro — était un accident, pas une intention.
+* `IcyStreamReader.onUnavailable` ne dit plus « j'abandonne » mais « ça fait
+  un moment que je n'y arrive pas ». C'est un avis pour l'interface : il ne
+  coupe plus ni le lecteur ni le proxy, et la boucle continue de retenter
+  derrière.
+* Le watchdog « premier octet » (15 s) émet désormais `PlayerInterrupted` au
+  lieu de `PlayerError`, et ne coupe plus rien.
+* `player.stop()` arrête maintenant aussi la couche réseau Dart (lecteur +
+  proxy) avant l'arrêt natif. Sans cela, la reconnexion sans plafond aurait
+  continué à consommer données et batterie après un arrêt volontaire. Le site
+  d'appel ne change pas.
+
+### Ajouté
+* État `PlayerInterrupted` — la lecture est interrompue et le plugin retente.
+  La sortie de cet état ne demande aucun événement explicite : ExoPlayer
+  réémet `PlayerPlaying` dès que les octets repartent.
+* `RadioService.retryNow()` — raccourcit le recul en cours et retente
+  immédiatement. Pour les hôtes qui savent que le réseau est revenu (module de
+  connectivité) avant que le plugin ne s'en aperçoive. Strictement optionnel :
+  la lecture repart toute seule sans cet appel, simplement plus tard.
+
+### Divers
+* `IcyStreamReader` ferme le `HttpClient` de la tentative précédente à chaque
+  tentative. Chaque tentative en créait un et `stop()` n'en fermait qu'un.
+* `AudioProxyServer.stop()` ferme son `StreamController _queue`, qui ne
+  l'était jamais.
+* `icy-metaint` n'est plus un champ d'instance mais lu par réponse : deux
+  connexions ne peuvent plus désaligner la séparation audio / métadonnées.
+* Un `stop()` pendant une lecture active ne laisse plus la lecture suspendue
+  pour toujours (annuler un abonnement ne déclenche ni `onDone` ni `onError`).
+* Nouveau banc `test/stream_reconnect_test.dart` couvrant la politique de
+  reconnexion et le jeton de génération face à un serveur ICY local.
+
+### Plateformes
+* Aucun changement natif — le côté Android n'était pas en cause.
+* L'implémentation web est inchangée : la surface de l'interface de
+  plateforme n'a pas bougé (`retryNow` et `PlayerInterrupted` vivent tous deux
+  dans la couche Dart).
+
 ## 0.1.4
 
 ### Maintenance

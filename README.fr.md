@@ -23,7 +23,7 @@ Développé pour Android (iOS prévu). Gère les flux ICY, SHOUTcast, AAC, MP3 e
 
 ```yaml
 dependencies:
-  radio_service: ^0.1.4
+  radio_service: ^0.1.5
 ```
 
 ---
@@ -85,8 +85,9 @@ service.metadataStream.listen((metadata) {
 
 // Écouter l'état du lecteur
 service.stateStream.listen((state) {
-  if (state is PlayerPlaying) print('Lecture en cours');
-  if (state is PlayerError)   print('Erreur : ${state.message}');
+  if (state is PlayerPlaying)     print('Lecture en cours');
+  if (state is PlayerInterrupted) print('Reconnexion…');
+  if (state is PlayerError)       print('Erreur : ${state.message}');
 });
 
 // Libérer les ressources
@@ -229,16 +230,53 @@ service.stateStream.listen((state) {
     case PlayerPlaying():    // Lecture en cours
     case PlayerPaused():     // En pause
     case PlayerStopped():    // Arrêté
+    case PlayerInterrupted():// Interrompu — le plugin se reconnecte
     case PlayerError(:final message): // Erreur
   }
 });
 ```
 
-`PlayerError` est émis quand le flux est indisponible : connexion refusée,
-erreur HTTP, échec DNS, erreur de lecture — ou quand aucune donnée audio
-n'arrive dans les 15 secondes suivant la connexion (garde-fou station
-injoignable). L'UI doit gérer cet état pour arrêter le loader et informer
-l'utilisateur.
+`PlayerState` est une classe scellée : ajouter un membre est une rupture
+volontaire. Un `switch` exhaustif dans votre application cesse de compiler,
+et c'est là qu'il faut l'apprendre — pas à l'écran chez la personne.
+
+`PlayerInterrupted` signifie que la couche Dart n'arrive plus à alimenter le
+flux : coupure réseau, station momentanément injoignable, ou aucun octet
+audio reçu dans les 15 secondes suivant la connexion. **Ce n'est ni une
+erreur, ni un arrêt.** Le plugin continue de se reconnecter seul,
+indéfiniment, tant que la lecture n'a pas été arrêtée. Affichez
+« reconnexion », gardez la station sélectionnée, ne videz pas l'interface.
+La sortie de cet état ne demande aucun événement dédié : `PlayerPlaying` est
+réémis dès que l'audio repart.
+
+`PlayerError` est émis pour une erreur de lecture remontée par le lecteur
+natif. Depuis la 0.1.5, une coupure réseau ne le produit plus.
+
+---
+
+## Reconnexion
+
+Le plugin possède la connexion, donc il possède la reconnexion.
+
+- **Pas de plafond de tentatives.** Il se reconnecte tant que la personne n'a
+  pas arrêté la lecture.
+- **Recul croissant et borné** : 1 s, 2 s, 4 s, 8 s, puis 15 s répété.
+- Une coupure en cours de flux et une fin de flux propre sont traitées à
+  l'identique.
+- C'est `player.stop()` qui y met fin — il coupe la couche réseau Dart en
+  plus de la lecture native.
+
+Votre application sait que le réseau est revenu avant le plugin. Si vous avez
+un module de connectivité, raccourcissez l'attente :
+
+```dart
+connectivity.onRestored.listen((_) => service.retryNow());
+```
+
+`retryNow()` raccourcit le recul en cours et retente immédiatement. C'est
+strictement une optimisation — sans cet appel la lecture repart quand même,
+simplement plus tard. Sans effet sur les flux HLS, où ExoPlayer possède la
+connexion.
 
 ### PlayerMetadata
 
