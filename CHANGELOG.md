@@ -1,3 +1,81 @@
+## 0.1.7
+
+### BREAKING
+* **`pause()` now releases the source.** It stops the Dart networking layer
+  (ICY reader + audio proxy) as well as the native player, and `play()` reloads
+  the station. Call sites are unchanged — `service.player.pause()` has the same
+  signature — but the behaviour is not: resuming costs a reconnection of about
+  a second, and metadata restart from the station's next ICY block. Hosts that
+  relied on an instantaneous resume should expect a short buffering state.
+  HLS is unaffected.
+
+### Fixed — a play button that did nothing at all
+* Until 0.1.6, `pause()` deliberately kept the stream alive "to allow an
+  instant resume". The ICY reader therefore kept pulling the station and
+  filling a local buffer **that nobody drained**. After a while the link broke;
+  resuming then started playback on a dead source, which produces **no sound
+  and no error either** — no state changed, no screen moved, and the listener
+  concluded they had missed the button. A silent button is worse than one that
+  fails: a failure is visible and gets reported, silence just gets repeated.
+  `pause()` now releases the source and `play()` reloads it.
+* A live stream is not resumed, it is rejoined. Even with the source intact,
+  resuming where playback stopped replays the past until the buffer drains —
+  ten minutes paused, ten minutes behind. Reloading is the correct behaviour,
+  not a workaround.
+* Pausing no longer looks like a network interruption: the release bumps the
+  stream generation token, so the disconnection it causes cannot be reported as
+  `PlayerInterrupted`.
+
+### Fixed — the notification did not open the app
+* `MediaSession` now carries a `setSessionActivity(...)`: the intent Media3
+  hands to **every** system surface that queries the session — lock screen,
+  system media controls, Android Auto, watch. Without it none of them knew
+  where to go.
+* The hand-built notification now carries a `setContentIntent(...)` of its own.
+  `MediaStyleNotificationHelper.MediaStyle(session)` does **not** reuse the
+  session activity as the content intent of a notification built by hand, so
+  setting only `setSessionActivity` would have left the notification body inert.
+* No host application is named: `getLaunchIntentForPackage(packageName)` yields
+  the entry point of whichever app embeds the plugin, so the plugin stays
+  universal. `FLAG_IMMUTABLE` is mandatory from Android 12 (API 31);
+  `SINGLE_TOP | CLEAR_TOP` avoid stacking a second instance over an app that is
+  already open.
+
+### Removed — an unreachable permission handler
+* The `radio_service/permissions` method channel and its
+  `requestNotificationPermission` handler are gone, along with the now-unused
+  `ActivityAware` implementation. Nothing in `lib/` ever called them.
+* The permission was never needed: the player's notification goes through a
+  `MediaSession`, and Android explicitly exempts those notifications from
+  `POST_NOTIFICATIONS` — which is why it has always displayed without anything
+  being granted. Dead code shaped like a feature is worse than no feature: the
+  day someone relies on it, they are wrong and it takes them a while to see why.
+* The `POST_NOTIFICATIONS` line **stays in the manifest**, documented. A
+  declaration has no effect until something requests it, and it spares a host
+  that posts its own notifications from adding it. Requesting it is the host's
+  job, not the plugin's.
+* The example app no longer calls the removed channel.
+
+### Example app
+* The station bank is now neutral: one reference stream per supported codec
+  (MP3, AAC-LC, HE-AAC, Ogg Vorbis, Ogg Opus, Ogg FLAC), plus HLS, an `.m3u`
+  playlist to exercise `PlaylistResolver`, and two edge cases — a stream with a
+  preroll and a 32 kbps mono one. They come from Radiomast's reference streams,
+  published for diagnosing players and free for personal and commercial use.
+  Whoever downloads the plugin no longer inherits someone else's stations.
+  One real station (FIP, HLS) is kept to exercise real in-band ID3 metadata and
+  artwork resolution, and the REST-metadata examples became generic templates.
+
+### Known gap — focus-driven pauses
+* Only an **explicit** `pause()` releases the source. A pause caused by audio
+  focus (incoming call, headphones unplugged via `handleAudioBecomingNoisy`) is
+  triggered natively and bypasses `PlayerController`, so it does not release.
+  That is intentional for a short interruption — instant resume is worth more
+  there — but a long focus interruption still strands the source exactly as
+  before. Closing it properly requires deciding what happens to automatic
+  resume when the stream has to be re-prepared first; that deserves its own
+  release rather than a passing change.
+
 ## 0.1.6
 
 Housekeeping release — no behaviour change to playback, metadata or

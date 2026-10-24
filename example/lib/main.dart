@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:radio_service/radio_service.dart';
 
 void main() => runApp(const MyApp());
@@ -37,98 +36,84 @@ class _RadioTestPageState extends State<RadioTestPage> {
   );
 
   // ── Banque de flux de test ────────────────────────────────────────────────
-  // Toutes les radios d'essai en une seule table, au lieu d'une constante par
-  // flux : elles restent disponibles et l'analyseur ne signale plus de champ
-  // mort. Pour tester une autre radio, changer [_selected] — rien d'autre.
+  // Un flux par type pris en charge, choisi NEUTRE à dessein : ce sont les
+  // « reference streams » de Radiomast, publiés pour diagnostiquer les
+  // lecteurs et explicitement libres d'usage personnel et commercial. Aucune
+  // station particulière n'est imposée à qui télécharge le plugin.
+  //   https://www.radiomast.io/reference-streams
   //
+  // Pour tester une autre radio, changer [_selected] — rien d'autre.
+  //
+  //   url         : flux à jouer (ICY progressif ou HLS .m3u8)
+  //   metadataUrl : endpoint REST optionnel, pour les radios sans ICY
+  //   mapping     : comment lire les champs dans la réponse JSON
   static const Map<String, _Stream> _streams = {
-    // ── Flux ICY progressifs ────────────────────────────────────────────────
-    'Radio Sofaia':
-        (url: 'https://radiosofaia.ice.infomaniak.ch/radiosofaia-high.aac',
+    // ── ICY progressif — un par codec ───────────────────────────────────────
+    // Ces flux portent des métadonnées ICY, donc ils passent par
+    // IcyStreamReader + AudioProxyServer : c'est le chemin principal du plugin.
+    'MP3 128k':
+        (url: 'https://streams.radiomast.io/ref-128k-mp3-stereo',
          metadataUrl: null, mapping: null),
-    'RTL Réunion':
-        (url: 'https://rtlre.ice.infomaniak.ch/rtlre-64.aac',
+    'AAC-LC 128k':
+        (url: 'https://streams.radiomast.io/ref-128k-aaclc-stereo',
          metadataUrl: null, mapping: null),
-    'Antilles Média — Live':
-        (url: 'https://antillesmedia.pro-fhi.net:1165/stream',
+    'HE-AAC v1 64k':
+        (url: 'https://streams.radiomast.io/ref-64k-heaacv1-stereo',
          metadataUrl: null, mapping: null),
-    'Antilles Média — Kompa':
-        (url: 'https://antillesmedia.pro-fhi.net/antillesmediakompa',
+    'Ogg Vorbis 64k':
+        (url: 'https://streams.radiomast.io/ref-64k-ogg-vorbis-stereo',
          metadataUrl: null, mapping: null),
-    'Antilles Média — Zouk':
-        (url: 'https://antillesmedia.pro-fhi.net/antillesmediazouk',
+    // Opus et FLAC sont reconnus par IcyStreamType mais ne figurent pas encore
+    // dans le tableau des formats pris en charge du README — à éprouver.
+    'Ogg Opus 64k':
+        (url: 'https://streams.radiomast.io/ref-64k-ogg-opus-stereo',
          metadataUrl: null, mapping: null),
-    'Antilles Média — Latine':
-        (url: 'https://antillesmedia.pro-fhi.net:1115/stream',
-         metadataUrl: null, mapping: null),
-    'Bel Radio Gpe':
-        (url: 'https://stream.rcs.revma.com/a7qacprtpwzuv',
-         metadataUrl: null, mapping: null),
-    'RHT Haute Tension':
-        (url: 'https://haute-tension.ice.infomaniak.ch/haute-tension-high.mp3',
-         metadataUrl: null, mapping: null),
-    'Espace FM':
-        (url: 'https://listen.radioking.com/radio/16769/stream/63784',
-         metadataUrl: null, mapping: null),
-    'Zikak':
-        (url: 'https://radio5.pro-fhi.net/listen-kowvdxtl-stream.mp3',
-         metadataUrl: null, mapping: null),
-    'Kot Karayib':
-        (url: 'https://listen.radioking.com/radio/378136/stream/429373',
-         metadataUrl: null, mapping: null),
-    'Guadeloupe 1ère':
-        (url: 'https://guadeloupe.ice.infomaniak.ch/guadeloupe-128.mp3',
-         metadataUrl: null, mapping: null),
-    // Variante avec point-virgule : https://radio3.pro-fhi.net:19004/;stream
-    'Radio Rossignol':
-        (url: 'https://radio3.pro-fhi.net:19004/stream',
-         metadataUrl: null, mapping: null),
-    'Cyber Streaming':
-        (url: 'https://stunnel2.cyber-streaming.com:9222/1',
+    'Ogg FLAC sans perte':
+        (url: 'https://streams.radiomast.io/ref-lossless-ogg-flac-stereo',
          metadataUrl: null, mapping: null),
 
-    // ── Flux HLS ────────────────────────────────────────────────────────────
-    // Vidéo Antilles Média TV — audio OK, pas de métadonnées musicales.
-    'HLS — Antilles Média TV':
-        (url: 'https://antillesmediavdo.pro-fhi.net:3663/live/amtvlive.m3u8',
+    // ── Cas limites utiles ──────────────────────────────────────────────────
+    // Preroll : le flux commence par une annonce. Bon test du watchdog
+    // « premier octet » et de l'enchaînement vers le contenu.
+    'MP3 128k + preroll':
+        (url: 'https://streams.radiomast.io/ref-128k-mp3-stereo-preroll',
          metadataUrl: null, mapping: null),
-    'HLS — Antilles Média TV multi':
-        (url: 'https://antillesmediavdo.pro-fhi.net:3663/multi_live/play.m3u8',
+    // Très bas débit mono — remplissage de tampon lent, utile pour observer
+    // les états de mise en tampon et la détection de silence.
+    'MP3 32k mono':
+        (url: 'https://streams.radiomast.io/ref-32k-mp3-mono',
          metadataUrl: null, mapping: null),
-    // Radio France — tags ID3 timed metadata (TIT2/TPE1) remontés par
-    // MetadataExtractor.kt. Bonnes sources de test pour le chemin HLS.
-    'HLS — France Inter':
-        (url: 'https://stream.radiofrance.fr/franceinter/franceinter.m3u8',
+
+    // ── Résolution de playlist ──────────────────────────────────────────────
+    // .m3u : PlaylistResolver doit extraire une URL de flux du fichier avant
+    // de passer la main. Celui-ci liste tous les flux de référence — le
+    // résolveur doit en retenir un. Le mécanisme .pls est identique ; toute
+    // station Icecast en publie un si vous voulez l'éprouver aussi.
+    'Playlist .m3u':
+        (url: 'https://www.radiomast.io/reference-streams.m3u',
          metadataUrl: null, mapping: null),
-    'HLS — FIP':
+
+    // ── HLS ─────────────────────────────────────────────────────────────────
+    // Chemin différent : ExoPlayer joue l'URL directement via HlsMediaSource,
+    // sans proxy ni IcyStreamReader. Les métadonnées viennent des tags ID3
+    // in-band des segments, remontés par MetadataExtractor.kt.
+    'HLS — MP3 128k':
+        (url: 'https://streams.radiomast.io/ref-128k-mp3-stereo/hls.m3u8',
+         metadataUrl: null, mapping: null),
+    'HLS — HE-AAC v1 64k':
+        (url: 'https://streams.radiomast.io/ref-64k-heaacv1-stereo/hls.m3u8',
+         metadataUrl: null, mapping: null),
+    // Station réelle, tags ID3 réels (TIT2/TPE1) : les flux de référence
+    // valident le transport, celui-ci valide l'affichage titre + artiste et
+    // la résolution de pochette sur le chemin HLS.
+    'HLS — FIP (station réelle)':
         (url: 'https://stream.radiofrance.fr/fip/fip.m3u8',
-         metadataUrl: null, mapping: null),
-    'HLS — FIP Reggae':
-        (url: 'https://stream.radiofrance.fr/fipreggae/fipreggae.m3u8',
-         metadataUrl: null, mapping: null),
-    'HLS — France Musique':
-        (url: 'https://stream.radiofrance.fr/francemusique/francemusique.m3u8',
-         metadataUrl: null, mapping: null),
-    'HLS — France Musique Opéra':
-        (url: 'https://stream.radiofrance.fr/francemusiqueopera/francemusiqueopera.m3u8',
          metadataUrl: null, mapping: null),
   };
 
-  // Mappings REST conservés ici : à recopier dans une entrée de [_streams]
-  // (metadataUrl + mapping) pour tester une radio sans métadonnées ICY.
-  //
-  //   Radio Paradise — pochette fournie par le champ 'cover' :
-  //     MetadataMapping(title: 'title', artist: 'artist',
-  //                     artworkUrl: 'cover', startTime: 'start_time')
-  //
-  //   Métis FM — JSON imbriqué sous la clé '8' :
-  //     MetadataMapping(title:      '8.current_song.title',
-  //                     artist:     '8.current_song.artist',
-  //                     artworkUrl: '8.current_song.img')
-
   // ── Sélection active ───────────────────────────────────────────────────────
-  // Une seule ligne à changer pour tester une autre radio.
-  static const _selected = 'Antilles Média — Live';
+  // Une seule ligne à changer pour tester un autre flux.
+  static const _selected = 'MP3 128k';
 
   Future<void> _play() async {
     final stream = _streams[_selected]!;
@@ -143,34 +128,38 @@ class _RadioTestPageState extends State<RadioTestPage> {
 
   // ── Variantes — remplacer le corps de _play() ci-dessus ───────────────────
   //
+  // Les flux de référence valident le transport et les codecs. Pour éprouver
+  // les métadonnées musicales, la pochette et le polling REST, il faut une
+  // vraie station : mettez la vôtre ci-dessous.
+  //
   // Logo de station (mémorisé par le plugin ; le fallback dans la notification
   // n'est pas encore implémenté) :
   //   await _service.setUrl(
-  //     _streams['Guadeloupe 1ère']!.url,
-  //     stationName:    'Guadeloupe 1ère',
-  //     stationLogoUrl: 'https://mon-serveur.com/logos/guadeloupe1ere.png',
+  //     'https://exemple.com/stream.mp3',
+  //     stationName:    'Ma Radio',
+  //     stationLogoUrl: 'https://exemple.com/logos/ma-radio.png',
   //   );
   //
-  // Radio sans ICY, métadonnées par polling REST — Métis FM, JSON imbriqué :
+  // Radio sans métadonnées ICY — titre et artiste par polling REST.
+  // Le mapping décrit où lire les champs dans le JSON, en chemins pointés :
   //   await _service.setUrl(
-  //     'https://str0.creacast.com/metisfm.mp3',
-  //     stationName:     'Métis FM',
-  //     metadataUrl:     'https://metis.fm/flux/metisfm/refresh.json?ck=0',
+  //     'https://exemple.com/stream.mp3',
+  //     stationName:     'Ma Radio',
+  //     metadataUrl:     'https://exemple.com/api/nowplaying.json',
   //     metadataMapping: const MetadataMapping(
-  //       title:      '8.current_song.title',
-  //       artist:     '8.current_song.artist',
-  //       artworkUrl: '8.current_song.img',
+  //       title:      'title',
+  //       artist:     'artist',
+  //       artworkUrl: 'artworkUrl',
   //     ),
   //   );
   //
-  // Radio Paradise — pochette fournie directement par le champ 'cover' :
+  // JSON imbriqué — le mapping suit la hiérarchie :
   //   metadataMapping: const MetadataMapping(
-  //     title: 'title', artist: 'artist',
-  //     artworkUrl: 'cover', startTime: 'start_time',
+  //     title:      'data.current_song.title',
+  //     artist:     'data.current_song.artist',
+  //     artworkUrl: 'data.current_song.img',
+  //     startTime:  'data.current_song.start_time',
   //   )
-  //
-  // Chemin HLS : mettre _selected sur une entrée 'HLS — …'. Les métadonnées y
-  // viennent des tags ID3 in-band, pas d'IcyStreamReader.
 
   // ── État ──────────────────────────────────────────────────────────────────
 
@@ -185,9 +174,8 @@ class _RadioTestPageState extends State<RadioTestPage> {
   @override
   void initState() {
     super.initState();
-    // Android 13+ — demande la permission d'afficher les notifications.
-    // Sans ça, la notification media et l'écran de verrouillage n'apparaissent pas.
-    _requestNotificationPermission();
+    // Aucune permission à demander : la notification du lecteur passe par une
+    // MediaSession, et Android exempte ces notifications de POST_NOTIFICATIONS.
     _service.stateStream.listen((s) => setState(() => _state = s));
     _service.metadataStream.listen((m) {
       // Stream silencieux — le flux est connecté mais la radio ne diffuse rien.
@@ -232,22 +220,6 @@ class _RadioTestPageState extends State<RadioTestPage> {
   void dispose() {
     _service.dispose();
     super.dispose();
-  }
-
-  // ── Permission notifications (Android 13+) ──────────────────────────────
-
-  static const _permissionChannel = MethodChannel('radio_service/permissions');
-
-  /// Demande la permission POST_NOTIFICATIONS sur Android 13+.
-  /// Sans cette permission, la notification media n'apparaît pas et
-  /// l'écran de verrouillage ne montre pas les contrôles de lecture.
-  Future<void> _requestNotificationPermission() async {
-    try {
-      await _permissionChannel.invokeMethod('requestNotificationPermission');
-    } catch (_) {
-      // Ignore — l'appel peut échouer si le canal n'est pas implémenté
-      // ou si la permission est déjà accordée / non nécessaire (< Android 13)
-    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

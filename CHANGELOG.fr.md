@@ -3,6 +3,88 @@
   Le fichier de référence pour pub.dev est CHANGELOG.md (anglais).
 -->
 
+## 0.1.7
+
+### RUPTURE
+* **`pause()` relâche désormais la source.** Elle coupe la couche réseau Dart
+  (lecteur ICY + proxy audio) en plus du lecteur natif, et `play()` recharge la
+  station. Les sites d'appel ne changent pas — `service.player.pause()` garde
+  la même signature — mais le comportement, si : la reprise coûte une
+  reconnexion d'environ une seconde, et les métadonnées repartent au prochain
+  bloc ICY de la station. Un hôte qui comptait sur une reprise instantanée doit
+  s'attendre à un court état de mise en tampon. HLS n'est pas concerné.
+
+### Corrigé — un bouton de lecture qui ne faisait rien du tout
+* Jusqu'en 0.1.6, `pause()` gardait délibérément le flux vivant « pour
+  permettre une reprise immédiate ». Le lecteur ICY continuait donc de tirer
+  sur la station et de remplir un tampon local **que plus personne ne vidait**.
+  Au bout d'un moment la liaison cassait ; la reprise relançait alors la
+  lecture sur une source morte, ce qui ne produit **ni son, ni erreur** — aucun
+  état ne changeait, aucun écran ne bougeait, et la personne concluait qu'elle
+  avait raté le bouton. Un bouton silencieux est pire qu'un bouton qui échoue :
+  un échec se voit et se signale, un silence se répète. `pause()` relâche
+  maintenant la source et `play()` la recharge.
+* Un direct ne se reprend pas, il se rejoint. Même source intacte, reprendre là
+  où la lecture s'est arrêtée fait réécouter le passé le temps que le tampon se
+  vide — dix minutes de pause, dix minutes de retard. Recharger est le
+  comportement juste, pas un contournement.
+* Une pause ne ressemble plus à une coupure réseau : le relâchement incrémente
+  le jeton de génération du flux, si bien que la déconnexion qu'il provoque ne
+  peut pas être annoncée comme `PlayerInterrupted`.
+
+### Corrigé — la notification n'ouvrait pas l'application
+* La `MediaSession` porte désormais un `setSessionActivity(...)` : l'intention
+  que Media3 remet à **toutes** les surfaces système qui interrogent la session
+  — écran de verrouillage, contrôles média du système, Android Auto, montre.
+  Sans elle, aucune ne savait où aller.
+* La notification construite à la main porte en plus son propre
+  `setContentIntent(...)`. `MediaStyleNotificationHelper.MediaStyle(session)`
+  **ne reprend pas** la session activity comme intention de contenu d'une
+  notification construite à la main : poser seulement `setSessionActivity`
+  aurait laissé le corps de la notification inerte.
+* Aucune application hôte n'est nommée : `getLaunchIntentForPackage(packageName)`
+  rend le point d'entrée de n'importe quel hôte, l'universalité du plugin est
+  préservée. `FLAG_IMMUTABLE` est obligatoire depuis Android 12 (API 31) ;
+  `SINGLE_TOP | CLEAR_TOP` évitent d'empiler une seconde instance par-dessus
+  une application déjà ouverte.
+
+### Supprimé — un gestionnaire d'autorisation injoignable
+* Le canal `radio_service/permissions` et son gestionnaire
+  `requestNotificationPermission` disparaissent, ainsi que l'implémentation
+  `ActivityAware` devenue inutile. Rien dans `lib/` ne les appelait.
+* L'autorisation n'a jamais été nécessaire : la notification du lecteur passe
+  par une `MediaSession`, et Android exempte explicitement ces notifications de
+  `POST_NOTIFICATIONS` — c'est pourquoi elle s'est toujours affichée sans que
+  rien n'ait été accordé. Du code mort qui a l'air d'une fonctionnalité est pire
+  que pas de fonctionnalité : le jour où quelqu'un s'y fie, il se trompe, et il
+  met du temps à comprendre pourquoi.
+* La ligne `POST_NOTIFICATIONS` **reste dans le manifeste**, documentée. Une
+  déclaration n'a aucun effet tant que personne ne demande, et elle évite à un
+  hôte qui poste ses propres notifications d'avoir à l'ajouter. Demander
+  l'autorisation est le rôle de l'hôte, pas du plugin.
+* L'application d'exemple n'appelle plus le canal supprimé.
+
+### Application d'exemple
+* La banque de stations devient neutre : un flux de référence par codec pris en
+  charge (MP3, AAC-LC, HE-AAC, Ogg Vorbis, Ogg Opus, Ogg FLAC), plus HLS, une
+  playlist `.m3u` pour éprouver `PlaylistResolver`, et deux cas limites — un
+  flux avec preroll et un 32 kbps mono. Ils viennent des flux de référence de
+  Radiomast, publiés pour diagnostiquer les lecteurs et libres d'usage personnel
+  et commercial. Qui télécharge le plugin n'hérite plus des stations d'un autre.
+  Une station réelle (FIP, en HLS) est conservée pour éprouver les vraies
+  métadonnées ID3 in-band et la résolution de pochette, et les exemples de
+  métadonnées REST sont devenus des gabarits génériques.
+
+### Limite connue — les pauses provoquées par le focus audio
+* Seule une pause **explicite** relâche la source. Une pause provoquée par le
+  focus audio (appel entrant, casque débranché via `handleAudioBecomingNoisy`)
+  est déclenchée nativement et court-circuite `PlayerController` : elle ne
+  relâche rien. C'est voulu pour une interruption courte — la reprise
+  instantanée y vaut davantage — mais une interruption longue laisse la source
+  en plan exactement comme avant. La fermer proprement suppose de trancher ce
+  qu'il advient de la reprise automatique quand le flux doit d'abord être
+  re-préparé ; cela mérite sa propre version plutôt qu'un changement au passage.
+
 ## 0.1.6
 
 Version d'hygiène — aucun changement de comportement sur la lecture, les

@@ -23,7 +23,7 @@ Développé pour Android (iOS prévu). Gère les flux ICY, SHOUTcast, AAC, MP3 e
 
 ```yaml
 dependencies:
-  radio_service: ^0.1.6
+  radio_service: ^0.1.7
 ```
 
 ---
@@ -193,7 +193,7 @@ EqualizerConfig.vShape()       // V-Shape
 
 ```dart
 service.player.play();
-service.player.pause();
+service.player.pause();   // relâche la source — voir « Pause » plus bas
 service.player.stop();
 service.player.setVolume(0.8);  // 0.0 à 1.0
 
@@ -201,6 +201,34 @@ service.player.setVolume(0.8);  // 0.0 à 1.0
 service.player.seek(position);
 service.player.seekToLive();
 ```
+
+---
+
+## Pause
+
+`pause()` coupe la couche réseau Dart (lecteur ICY + proxy audio) en plus du
+lecteur natif, et `play()` recharge la station.
+
+C'est délibéré. Un direct n'a pas de « reprise » : garder la connexion ouverte
+pendant une pause remplit un tampon que plus personne ne vide, la liaison finit
+par casser, et la reprise relance la lecture sur une source morte — sans son et
+sans erreur. Et même quand la source tient, reprendre là où on s'était arrêté
+fait réécouter le passé le temps que le tampon se vide : dix minutes de pause,
+dix minutes de retard. **Un direct ne se reprend pas, il se rejoint.** La
+reconnexion de `play()` n'est pas un coût, c'est le comportement juste.
+
+Conséquences pour l'hôte :
+
+- La reprise coûte une reconnexion (environ une seconde), et les métadonnées
+  repartent au prochain bloc ICY de la station.
+- Rien n'est consommé sur le réseau pendant une pause.
+- HLS n'est pas concerné : ExoPlayer y détient la connexion, la pause reste une
+  pause native pure.
+- **Seule une pause explicite relâche la source.** Une pause provoquée par le
+  focus audio (appel entrant, casque débranché) est déclenchée nativement et ne
+  relâche rien — volontairement, pour qu'une interruption courte reprenne
+  instantanément. Une interruption longue laisse donc encore la source en
+  plan ; à traiter côté hôte en rappelant `setUrl()` à la reprise.
 
 ---
 
@@ -301,6 +329,13 @@ service.metadataStream.listen((m) {
 | AAC    | ✅ | `.aac`, `.aacp` |
 | OGG    | ✅ | Vorbis |
 | HLS    | ➖ | Supporté via `isHls: true` (pas de métadonnées ICY inline ; utiliser le polling REST) |
+
+L'application d'exemple embarque une banque de flux de référence neutres — un
+par codec, plus HLS, une playlist et deux cas limites (preroll, très bas débit).
+Ils viennent des [flux de référence de Radiomast](https://www.radiomast.io/reference-streams),
+publiés pour diagnostiquer les lecteurs et libres d'usage personnel et
+commercial : rien n'attache l'exemple à une station particulière. Pointez
+`_selected` sur l'un d'eux, ou mettez la vôtre.
 
 ### Playlists
 

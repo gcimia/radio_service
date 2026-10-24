@@ -15,8 +15,14 @@
         android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- Notifications runtime — requis depuis API 33 (Android 13).
-         Ignorée silencieusement sur API < 33. -->
+    <!-- Notifications runtime — API 33+ (Android 13).
+         Le plugin ne la demande JAMAIS et n'en a pas besoin : sa notification
+         passe par une MediaSession, et Android exempte explicitement ces
+         notifications de POST_NOTIFICATIONS. Elle s'affiche donc sans qu'aucune
+         autorisation n'ait été accordée.
+         La déclaration est conservée pour l'application hôte : une déclaration
+         n'a aucun effet tant que personne ne demande, et elle évite à un hôte
+         qui poste ses propres notifications d'avoir à l'ajouter. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application

@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'radio_service'
-  s.version          = '0.1.6'
+  s.version          = '0.1.7'
   s.summary          = 'Internet radio playback with ICY metadata, artwork and background audio.'
   s.description      = <<-DESC
 Flutter plugin for internet radio streaming. NOT YET IMPLEMENTED on this

@@ -1,6 +1,7 @@
 package com.dev.gcimia.radio_service
 
 import android.app.Notification
+import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
 import androidx.core.app.ServiceCompat
@@ -34,9 +35,40 @@ class RadioMediaService : MediaSessionService() {
 
         val player = sharedPlayer ?: ExoPlayer.Builder(this).build()
 
-        mediaSession = MediaSession.Builder(this, player).build()
+        // Intention « ouvrir l'application hôte ».
+        //
+        // Le plugin n'a pas à connaître l'application : getLaunchIntentForPackage
+        // rend le point d'entrée de n'importe quel hôte. Aucune application n'est
+        // nommée, l'universalité du plugin est préservée.
+        //
+        // FLAG_IMMUTABLE est obligatoire depuis Android 12 (API 31) — sans lui
+        // getActivity lève une exception.
+        // SINGLE_TOP + CLEAR_TOP évitent d'empiler une seconde instance
+        // par-dessus l'application déjà ouverte.
+        val openHost = packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
+            launch.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            PendingIntent.getActivity(
+                this,
+                0,
+                launch,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+        }
 
-        notificationManager = mediaSession?.let { RadioNotificationManager(this, it) }
+        // setSessionActivity : intention remise par Media3 à TOUTES les surfaces
+        // système qui interrogent la session — écran de verrouillage, contrôles
+        // média du système, Android Auto, montre.
+        mediaSession = MediaSession.Builder(this, player)
+            .apply { openHost?.let { setSessionActivity(it) } }
+            .build()
+
+        // La notification est construite à la main : MediaStyle(session) ne
+        // reprend PAS la sessionActivity pour en faire le contentIntent. Il faut
+        // donc passer l'intention au gestionnaire, sinon toucher le corps de la
+        // notification ne fait toujours rien.
+        notificationManager = mediaSession?.let {
+            RadioNotificationManager(this, it, openHost)
+        }
 
         // Rafraîchit la notification uniquement sur changement de métadonnées.
         //
@@ -122,6 +154,16 @@ class RadioMediaService : MediaSessionService() {
         )
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle("Radio")
+            .setContentIntent(
+                packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
+                    launch.flags =
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    PendingIntent.getActivity(
+                        this, 0, launch,
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    )
+                },
+            )
             .setSilent(true)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
             .build()

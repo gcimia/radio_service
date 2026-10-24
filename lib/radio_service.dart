@@ -59,6 +59,15 @@ class RadioService {
   /// Sert uniquement à écarter une pochette résolue pour un titre périmé.
   int _generation = 0;
 
+  /// Dernier appel à [setUrl], mémorisé pour pouvoir recharger la station
+  /// après une pause qui a relâché la source. `null` tant qu'aucun flux n'a
+  /// été chargé, et remis à `null` par [dispose].
+  _StreamRequest? _lastRequest;
+
+  /// Vrai entre une pause qui a relâché la source et la lecture qui la
+  /// recharge. Seule une pause explicite le lève (voir [PlayerController]).
+  bool _releasedByPause = false;
+
   /// Jeton de génération du FLUX — incrémenté à chaque [setUrl] et à chaque
   /// [_stopStream]. Distinct de [_generation] (qui suit les titres musicaux).
   ///
@@ -152,7 +161,13 @@ class RadioService {
         background   = BackgroundService() {
     // L'arrêt explicite coupe aussi la couche réseau Dart : c'est la seule
     // chose qui met fin à la reconnexion automatique, désormais sans plafond.
-    player = PlayerController(onStop: _stopStream);
+    player = PlayerController(
+      hooks: PlayerStreamHooks(
+        onStop:       _stopOnRequest,
+        onPause:      _releaseForPause,
+        onBeforePlay: _restoreAfterPause,
+      ),
+    );
 
     if (artworkConfig.enabled) {
       _artworkResolver = ArtworkResolver(config: artworkConfig);
@@ -274,6 +289,21 @@ class RadioService {
 
     // Premier point de suspension : un autre setUrl a pu passer entre-temps.
     if (generation != _streamGeneration) return;
+
+    // Mémorise la demande pour pouvoir la rejouer après une pause. On la pose
+    // APRÈS la résolution de playlist : `isHls` décide si la pause relâche
+    // quoi que ce soit, et une playlist .pls peut pointer ailleurs à chaque
+    // résolution — c'est l'URL d'origine qu'il faut rejouer, pas la résolue.
+    _lastRequest = _StreamRequest(
+      url:             url,
+      stationName:     stationName,
+      stationLogoUrl:  stationLogoUrl,
+      metadataUrl:     metadataUrl,
+      metadataMapping: metadataMapping,
+      pollingInterval: pollingInterval,
+      isHls:           resolved.isHls,
+    );
+    _releasedByPause = false;
 
     if (resolved.isHls) {
       // ── Chemin HLS ─────────────────────────────────────────────────────────
@@ -687,6 +717,67 @@ class RadioService {
     }
   }
 
+  // ── Pause, reprise, arrêt — cycle de vie de la source ──────────────────────
+
+  /// Arrêt explicite : coupe la couche réseau Dart et oublie la station.
+  Future<void> _stopOnRequest() async {
+    _lastRequest     = null;
+    _releasedByPause = false;
+    await _stopStream();
+  }
+
+  /// Pause explicite : relâche la source.
+  ///
+  /// Jusqu'en v0.1.6 la pause ne coupait rien, « pour permettre une reprise
+  /// immédiate ». Le lecteur ICY continuait donc de tirer sur la station et de
+  /// remplir un tampon que plus personne ne vidait ; au bout d'un moment la
+  /// liaison cassait, et la reprise relançait la lecture sur une source morte —
+  /// ni son, ni erreur, ni mouvement à l'écran.
+  ///
+  /// Sans effet sur un flux HLS : ExoPlayer y détient la connexion, la pause
+  /// ne consomme rien côté Dart et une reconnexion serait gratuite.
+  Future<void> _releaseForPause() async {
+    final request = _lastRequest;
+    if (request == null || request.isHls) return;
+    if (_releasedByPause) return;
+
+    // ── DEBUG ────────────────────────────────────────────────────────────────
+    debugPrint('[RadioService] pause — source relâchée, rechargée à la reprise');
+    // ── FIN DEBUG ────────────────────────────────────────────────────────────
+
+    _releasedByPause = true;
+    // _stopStream incrémente le jeton de génération : la coupure qui suit ne
+    // peut donc pas être annoncée comme une interruption. Une pause ne doit
+    // jamais ressembler à une perte de réseau.
+    await _stopStream();
+  }
+
+  /// Avant la lecture : recharge la station si une pause l'avait relâchée.
+  ///
+  /// Recharger plutôt que reprendre est le comportement juste pour un direct.
+  /// Même si la source tenait encore, reprendre là où on s'était arrêté ferait
+  /// réécouter le passé le temps que le tampon se vide — dix minutes de pause,
+  /// dix minutes de retard.
+  Future<void> _restoreAfterPause() async {
+    if (!_releasedByPause) return;
+    final request = _lastRequest;
+    _releasedByPause = false;
+    if (request == null) return;
+
+    // ── DEBUG ────────────────────────────────────────────────────────────────
+    debugPrint('[RadioService] reprise — rechargement de la station');
+    // ── FIN DEBUG ────────────────────────────────────────────────────────────
+
+    await setUrl(
+      request.url,
+      stationName:     request.stationName,
+      stationLogoUrl:  request.stationLogoUrl,
+      metadataUrl:     request.metadataUrl,
+      metadataMapping: request.metadataMapping,
+      pollingInterval: request.pollingInterval,
+    );
+  }
+
   // ── Reprise forcée ──────────────────────────────────────────────────────────
 
   /// Raccourcit le recul en cours et retente immédiatement.
@@ -746,6 +837,8 @@ class RadioService {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _lastRequest     = null;
+    _releasedByPause = false;
     await _stopStream();
     await _nativeStateSub?.cancel();
     _nativeStateSub = null;
@@ -754,4 +847,31 @@ class RadioService {
     await _metadataController.close();
     await _stateController.close();
   }
+}
+
+/// Arguments d'un appel à [RadioService.setUrl], mémorisés pour pouvoir
+/// recharger la station après une pause qui a relâché la source.
+///
+/// On garde l'URL D'ORIGINE, pas celle résolue : une playlist (.pls, .m3u) peut
+/// désigner un autre serveur à chaque résolution, et c'est la demande initiale
+/// qu'il faut rejouer. [isHls] est en revanche le résultat de la résolution —
+/// c'est lui qui décide si une pause a quelque chose à relâcher.
+class _StreamRequest {
+  const _StreamRequest({
+    required this.url,
+    required this.stationName,
+    required this.stationLogoUrl,
+    required this.metadataUrl,
+    required this.metadataMapping,
+    required this.pollingInterval,
+    required this.isHls,
+  });
+
+  final String           url;
+  final String?          stationName;
+  final String?          stationLogoUrl;
+  final String?          metadataUrl;
+  final MetadataMapping? metadataMapping;
+  final Duration         pollingInterval;
+  final bool             isHls;
 }

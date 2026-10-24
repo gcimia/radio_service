@@ -23,7 +23,7 @@ Built for Android (iOS support planned). Handles ICY streams, SHOUTcast, AAC, MP
 
 ```yaml
 dependencies:
-  radio_service: ^0.1.6
+  radio_service: ^0.1.7
 ```
 
 ---
@@ -192,7 +192,7 @@ EqualizerConfig.vShape()
 
 ```dart
 service.player.play();
-service.player.pause();
+service.player.pause();   // releases the source — see "Pause" below
 service.player.stop();
 service.player.setVolume(0.8);  // 0.0 to 1.0
 
@@ -200,6 +200,34 @@ service.player.setVolume(0.8);  // 0.0 to 1.0
 service.player.seek(position);
 service.player.seekToLive();
 ```
+
+---
+
+## Pause
+
+`pause()` stops the Dart networking layer (ICY reader + audio proxy) as well as
+the native player, and `play()` reloads the station.
+
+This is deliberate. A live stream has no "resume": keeping the connection alive
+through a pause fills a buffer nobody drains, the link eventually breaks, and
+resuming then plays from a dead source — no sound, no error. And even when the
+source holds, resuming where you left off replays the past until the buffer
+drains: ten minutes paused, ten minutes behind. **A live stream is not resumed,
+it is rejoined.** The reconnection `play()` performs is the correct behaviour,
+not a cost.
+
+Consequences for the host:
+
+- Resuming costs a reconnection (roughly a second), and metadata restart from
+  the station's next ICY block.
+- Nothing is consumed on the network while paused.
+- HLS is unaffected: ExoPlayer owns the connection there, so pause stays a pure
+  native pause.
+- **Only an explicit `pause()` releases the source.** A pause caused by audio
+  focus (incoming call, headphones unplugged) is triggered natively and does
+  not — intentionally, so a short interruption resumes instantly. A long focus
+  interruption therefore still strands the source; handle it host-side by
+  calling `setUrl()` again on resume.
 
 ---
 
@@ -296,6 +324,13 @@ service.metadataStream.listen((m) {
 | AAC    | ✅ | `.aac`, `.aacp` |
 | OGG    | ✅ | Vorbis |
 | HLS    | ➖ | Supported via `isHls: true` (no inline ICY metadata; use REST polling) |
+
+The example app ships a bank of neutral reference streams — one per codec,
+plus HLS, a playlist and two edge cases (preroll, very low bitrate). They come
+from [Radiomast's reference streams](https://www.radiomast.io/reference-streams),
+published for diagnosing players and free for personal and commercial use, so
+nothing ties the example to any particular station. Point `_selected` at one of
+them, or drop your own station in.
 
 ### Playlist formats
 
