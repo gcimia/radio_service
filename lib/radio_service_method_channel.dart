@@ -63,6 +63,31 @@ class MethodChannelRadioService extends RadioServicePlatform {
   };
 
   @override
+  Future<EqualizerBackend> getEqualizerBackend() async {
+    final map = await methodChannel
+        .invokeMapMethod<String, dynamic>('getEqualizerBackend');
+    return switch (map?['backend'] as String?) {
+      'system' => EqualizerSystem(),
+      'plugin' => EqualizerPlugin(),
+      _        => EqualizerUnavailable(
+                    map?['reason'] as String? ?? 'raison inconnue'),
+    };
+  }
+
+  @override
+  Future<void> openSystemEqualizer() =>
+      methodChannel.invokeMethod('openSystemEqualizer');
+
+  @override
+  Future<void> useBuiltInEqualizer() =>
+      methodChannel.invokeMethod('useBuiltInEqualizer');
+
+  @override
+  Stream<String> get externalPauseStream => _rawEvents
+      .where((e) => e['type'] == 'externalPause')
+      .map((e) => e['reason'] as String? ?? 'unknown');
+
+  @override
   Stream<PlayerPosition> get positionStream => _rawEvents
       .where((e) => e['type'] == 'position')
       .map((e) {
@@ -82,11 +107,13 @@ class MethodChannelRadioService extends RadioServicePlatform {
     bool equalizerEnabled  = true,
     bool backgroundEnabled = true,
     bool autoResumeAfterFocusLoss = true,
+    bool preferSystemEqualizer = true,
   }) =>
       methodChannel.invokeMethod('configure', {
         'equalizerEnabled':  equalizerEnabled,
         'backgroundEnabled': backgroundEnabled,
         'autoResumeAfterFocusLoss': autoResumeAfterFocusLoss,
+        'preferSystemEqualizer':    preferSystemEqualizer,
       });
 
   /// Transmet l'URL à ExoPlayer.

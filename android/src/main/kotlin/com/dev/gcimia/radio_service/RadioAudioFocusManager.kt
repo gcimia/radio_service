@@ -14,17 +14,24 @@ import android.os.Build
  * `handleAudioFocus=true` de Media3 ne permet pas (il reprend toujours).
  *
  * Comportement (calqué sur audio_service) :
- *   - perte permanente (AUDIOFOCUS_LOSS)            → pause, pas de reprise auto
+ *   - perte permanente (AUDIOFOCUS_LOSS)            → [onPermanentLoss] : pause
+ *                                                     ET relâchement de la source
  *   - perte transitoire (AUDIOFOCUS_LOSS_TRANSIENT) → pause, reprise auto au retour si [autoResume]
  *   - duckable (…_CAN_DUCK : notif courte, GPS)     → baisse le volume, restaure au retour
  *   - retour du focus (AUDIOFOCUS_GAIN)             → restaure le volume ; reprend si applicable
  */
 class RadioAudioFocusManager(
     context: Context,
-    private val onPause:  () -> Unit,   // mettre en pause (perte de focus)
+    private val onPause:  () -> Unit,   // pause TRANSITOIRE (reprise auto possible)
     private val onResume: () -> Unit,   // reprendre la lecture (focus regagné)
     private val onDuck:   () -> Unit,   // baisser le volume (ducking)
     private val onUnduck: () -> Unit,   // restaurer le volume
+    // Perte DÉFINITIVE du focus. Distincte de [onPause] parce que les deux
+    // appellent des traitements opposés côté Dart : une interruption
+    // transitoire doit garder la source prête pour une reprise instantanée,
+    // une perte définitive doit la relâcher. Un seul rappel pour les deux ne
+    // permettait pas de faire la différence.
+    private val onPermanentLoss: () -> Unit = onPause,
 ) {
     private val audioManager =
         context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -42,8 +49,9 @@ class RadioAudioFocusManager(
         when (change) {
             AudioManager.AUDIOFOCUS_LOSS -> {
                 // Perte définitive (une autre appli média a pris le focus).
+                // Aucune reprise auto n'est attendue : on relâche la source.
                 pausedByTransientLoss = false
-                onPause()
+                onPermanentLoss()
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
                 // Interruption temporaire (appel…). Reprise possible au retour.

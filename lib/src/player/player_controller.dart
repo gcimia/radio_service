@@ -61,11 +61,14 @@ class PlayerController {
   /// Sans effet sur les flux HLS, où ExoPlayer détient la connexion : la pause
   /// n'y consomme rien côté Dart et reste une pause native pure.
   ///
-  /// Attention : seule une pause EXPLICITE passe par ici. Une pause provoquée
-  /// par le focus audio (appel entrant, casque débranché) est déclenchée
-  /// nativement et ne relâche pas la source — c'est voulu pour une
-  /// interruption courte, mais une interruption longue laisse encore le
-  /// problème entier. Voir le CHANGELOG de la v0.1.7.
+  /// Une pause imposée par le système prend un autre chemin mais aboutit au
+  /// même endroit : depuis la v0.1.8, un casque débranché ou une perte
+  /// DÉFINITIVE du focus audio émettent un événement natif `externalPause`
+  /// auquel [RadioService] réagit en appelant le même rappel [onPause].
+  ///
+  /// Une interruption TRANSITOIRE (appel entrant) ne relâche volontairement
+  /// rien : la reprise automatique doit y être instantanée, et une
+  /// reconnexion la rendrait impossible.
   Future<void> pause() async {
     await _hooks?.onPause?.call();
     await RadioServicePlatform.instance.pause();

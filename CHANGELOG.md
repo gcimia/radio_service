@@ -1,3 +1,185 @@
+## 0.1.9
+
+### Fixed — the manufacturer's panel was invisible, so the plugin kept its own
+* Detection used `resolveActivity`, which since Android 11 (API 30) only
+  returns activities the app is allowed to see. Without a `<queries>`
+  declaration the manufacturer's equalizer activity is invisible, the call
+  returns null, and the plugin concludes there is no system equalizer — then
+  attaches its own. On a Galaxy A25 the routing therefore always fell back to
+  the plugin branch, audibly, while the device's panel did nothing.
+* The plugin's manifest now declares visibility for
+  `android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL`; the block is
+  merged into the host application's manifest.
+* The result is memoised: it depends only on installed packages and `Build`
+  fields, neither of which change during the process. Without that, the
+  `PackageManager` query ran on every `equalizerBackend()` call — so on every
+  `STATE_READY`, that is on every station change — and the log line repeated.
+* Detection uses `queryIntentActivities` rather than `resolveActivity`: when
+  several activities answer, `resolveActivity` returns the system chooser — or
+  null — whereas the question is only whether anything answers at all. What
+  answered is logged, so an empty result points at the manifest rather than at
+  the device.
+
+### BREAKING
+* On a device that exposes its own equalizer panel, the plugin now **defers to
+  it** and attaches no `Equalizer` effect of its own. `equalizer.apply()` has
+  no effect there, and the host must offer a button calling
+  `equalizer.openSystemPanel()` instead of its own sliders. Query
+  `equalizer.backend` to know which. Pass `preferSystemEqualizer: false` to
+  `RadioService` to keep the old behaviour everywhere.
+* `RadioServicePlatform.configure()` gains a `preferSystemEqualizer` parameter;
+  any custom platform implementation must declare it.
+
+### Added — equalizer routing
+* New sealed class `EqualizerBackend`, with `EqualizerSystem`,
+  `EqualizerPlugin` and `EqualizerUnavailable(reason)`. Sealed rather than an
+  enum, for the same reason as `PlayerState`: an exhaustive switch in the host
+  stops compiling when a member is added, and the carried reason says *why*
+  there is no equalizer.
+* `equalizer.backend` — resolved once and memoised; `equalizer.openSystemPanel()`
+  opens the manufacturer's panel for the player's audio session.
+* Detection does not look at the brand. It asks the system whether an activity
+  answers `ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL` — a question about a
+  capability, which ages well.
+* The plugin now broadcasts `ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION` when the
+  audio session becomes valid and `ACTION_CLOSE_...` on release, so the
+  device's equalizer applies to *our* stream rather than to a global setting.
+  Opening the panel alone would not have been enough.
+
+### Changed — one button, and no choice handed to the listener
+* The example now shows a single **Égaliseur** button. Behind it: the
+  manufacturer's panel where one exists, the plugin's sliders in a sheet
+  otherwise. Same label, same gesture, whatever the handset. When no equalizer
+  is available at all, there is no button rather than a disabled one with an
+  explanation.
+* An earlier iteration offered a "doesn't work? use the app's one" fallback
+  link beneath the button. That pushed the plugin's own uncertainty into the
+  interface — the listener had to diagnose and correct a bet the code had made.
+  A button either works or is not shown.
+
+### Note for developers — the Android emulator
+* `preferSystemEqualizer` defaults to `true`, which is right on a real
+  handset: verified on a Galaxy A25, where the manufacturer's panel opens and
+  its controls genuinely change the sound.
+* Emulated environments are excluded by the plugin itself. They answer the
+  panel intent with an activity that opens and closes without setting
+  anything, so delegating there means a dead button. There is no official API
+  for this — Android Studio reads the same `Build` properties over adb — so
+  the check uses the stable, documented signals (`Build.HARDWARE` of `goldfish`
+  / `ranchu` / `vbox86` / `android_x86`, a generic or emulator fingerprint, an
+  SDK product name, a `Build.DEVICE` starting with `emu`, Genymotion). It is a
+  convenience, not a security control, and it is trivially bypassed — which is
+  fine, that is not its purpose.
+* The device identity actually read is logged on one line, in the same shape
+  Media3 uses for its own `MediaSessionImpl` init line, plus `HARDWARE` and
+  `PRODUCT`. A handset that slips through the check therefore diagnoses
+  itself: the log says which values were seen, and they only have to be
+  compared with the list of signals above.
+* An unrecognised emulator falls through to the previous behaviour, and
+  `equalizer.useBuiltIn()` remains the escape — a host tool, never a control to
+  put in front of the listener.
+
+### Fixed — obsolete `package` attribute in the manifest
+* Removed `package="…"` from the plugin's `AndroidManifest.xml`. Since AGP 8
+  the module's identity comes from `namespace` in `android/build.gradle.kts`,
+  where it is already declared; keeping both is redundant and confuses the
+  IDE's manifest validation. Relative class names (`.RadioMediaService`) still
+  resolve against the namespace at merge time.
+
+### Added — a way to overrule the detection
+* `equalizer.useBuiltIn()` switches to the plugin's equalizer for the rest of
+  the session and attaches it immediately, even mid-playback.
+* It exists because **answering the intent does not prove the panel works**.
+  Some system images — the Android emulator among them — expose an activity
+  that opens and closes again without setting anything, and no API tells you
+  beforehand. Detection is a presumption at best; the host must be able to
+  contradict it at runtime, or the listener is left with a button that does
+  nothing and no sliders to replace it.
+* Detection also now ignores activities from the host's own package and any
+  that are disabled or not exported.
+* The example offers the fallback as a link under the system button.
+
+### Why
+* The standard Android effect bundle subtracts headroom proportional to the
+  largest positive gain requested, to avoid clipping. A preset raising bass by
+  6 dB therefore drops the whole output by about as much: the curve is right,
+  the level has fallen, and a boost is heard as an attenuation. Measured on a
+  Galaxy A25 with every manufacturer effect switched off — flat was the
+  loudest setting, and +6 dB on all five bands was barely louder than flat,
+  which is exactly what that model predicts.
+* A manufacturer's equalizer has more bands, is tuned for that speaker, and is
+  set with the right headroom. Where the device knows better, the plugin gets
+  out of the way rather than stacking a second processor in series.
+* What this costs, and it is deliberate: on those devices the setting belongs
+  to the phone. The plugin can neither read it, nor remember it, nor restore
+  it, and the host shows a different control depending on the handset.
+
+## 0.1.8
+
+### Fixed — unplugging headphones left the radio stuck reconnecting
+* `setHandleAudioBecomingNoisy(true)` let ExoPlayer pause itself **without
+  telling Dart**. The Dart layer kept its upstream connection open for a player
+  that had stopped reading; the link eventually expired and the reader looped
+  on reconnection (`PlayerInterrupted`) with no way out — closing the app was
+  the only recovery, and changing station did not help.
+* The plugin now owns that broadcast: `setHandleAudioBecomingNoisy(false)` plus
+  an `ACTION_AUDIO_BECOMING_NOISY` receiver registered on `play()` and released
+  on `pause()`, `stop()`, `release()` and on the pause itself. The receiver is
+  registered through `ContextCompat.registerReceiver` with
+  `RECEIVER_NOT_EXPORTED`, mandatory from Android 14 (API 34) — a bare
+  `registerReceiver()` throws there.
+* A **permanent** loss of audio focus (`AUDIOFOCUS_LOSS`) takes the same route.
+  `RadioAudioFocusManager` gains an `onPermanentLoss` callback, distinct from
+  `onPause`, because the two need opposite treatment downstream: a transient
+  interruption must keep the source ready so automatic resume stays instant, a
+  permanent one must release it. One callback for both could not tell them
+  apart.
+* New native event `externalPause` (reason: `noisy` or `focusLoss`), surfaced
+  as `RadioServicePlatform.externalPauseStream`. `RadioService` subscribes to
+  it and runs exactly the explicit-pause path — without asking the native side
+  to pause again, since it already has. The next `play()` reloads the station.
+* This closes the gap documented as "Known gap — focus-driven pauses" in 0.1.7.
+
+### Fixed — equalizer bands were applied by position, not by frequency
+* `RadioEqualizer.apply()` wrote `gains[i]` into hardware band `i`, assuming
+  five bands at 60 / 230 / 910 / 3600 / 14000 Hz. The band count and centre
+  frequencies are device-dependent: 3, 5, 6, 8 or 10 bands, centred elsewhere.
+  On a ten-band device the "treble" gain landed around 500 Hz and every band
+  above 1 kHz was forced flat — an unintended low-pass. Presets came out
+  almost inaudible, and boosts could read as attenuation.
+* The five gains are now interpolated onto each band's **real** centre
+  frequency, on a log scale because that is how pitch is perceived. Outside the
+  nominal range the end value is extended rather than dropping to zero, so a
+  device whose last band sits at 16 kHz still follows the treble slider.
+* On a device that does expose the five nominal frequencies, the interpolation
+  returns the input gains exactly — verified numerically. The fix changes
+  nothing where the equalizer already behaved correctly.
+
+### Added — equalizer diagnostics
+* `RadioEqualizer` dumps the device's equalizer profile once on creation: audio
+  session id, enabled state, band count, level range, and for each band its
+  centre frequency, its frequency span and its current level. It also lists the
+  manufacturer presets and every audio effect the system exposes
+  (`AudioEffect.queryEffects()`).
+* `apply()` now reads the levels back after writing them. What the device keeps
+  can differ from what was asked — quantisation, clamping, or a vendor
+  implementation — and the readback is the only way, short of a measurement, to
+  tell "the plugin asks wrongly" from "the device does something else with the
+  request".
+* Both go to logcat under the `RadioEqualizer` tag. Comparing the block between
+  two handsets answers in one read why the same setting does not sound the same
+  on both.
+
+### Fixed — the equalizer setting was lost on every station change
+* `setUrl()` releases the equalizer (the audio session id changes with the
+  stream) and cleared `pendingEqualizer` with it. A setting sent *before*
+  `setUrl` was therefore dropped, and the host had to resend it after every
+  load for it to stick.
+* `RadioExoPlayer` now keeps a `lastEqualizer` that survives station changes
+  and is reapplied when the new session reaches `STATE_READY`. It is cleared
+  by `resetEqualizer()`, by `configure(equalizerEnabled: false)` and by
+  `release()` — not by `setUrl()`.
+
 ## 0.1.7
 
 ### BREAKING

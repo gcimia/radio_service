@@ -23,7 +23,7 @@ Built for Android (iOS support planned). Handles ICY streams, SHOUTcast, AAC, MP
 
 ```yaml
 dependencies:
-  radio_service: ^0.1.7
+  radio_service: ^0.1.9
 ```
 
 ---
@@ -168,7 +168,11 @@ to absolute URLs using the metadata endpoint's base domain.
 // Apply a preset
 service.equalizer.apply(const EqualizerConfig.bassBoost());
 
-// Custom bands (dB, range: -15 to +15)
+// Custom bands (dB, range: -15 to +15).
+// These five gains are nominal frequencies, not hardware band indices: the
+// plugin interpolates them (on a log frequency scale) onto whatever centre
+// frequencies the device's equalizer actually exposes — 3, 5, 8 or 10 bands.
+// A setting survives a station change; the host does not have to resend it.
 service.equalizer.apply(EqualizerConfig(
   sub:    3.0,
   bass:   2.0,
@@ -223,11 +227,48 @@ Consequences for the host:
 - Nothing is consumed on the network while paused.
 - HLS is unaffected: ExoPlayer owns the connection there, so pause stays a pure
   native pause.
-- **Only an explicit `pause()` releases the source.** A pause caused by audio
-  focus (incoming call, headphones unplugged) is triggered natively and does
-  not — intentionally, so a short interruption resumes instantly. A long focus
-  interruption therefore still strands the source; handle it host-side by
-  calling `setUrl()` again on resume.
+- **A pause imposed by the system releases the source too**, since 0.1.8:
+  headphones unplugged, or a permanent loss of audio focus (another media app
+  took over). Nothing is required of the host — the next `play()` reloads the
+  station exactly as after an explicit pause.
+- **A transient interruption does not** — an incoming call keeps the source
+  ready so automatic resume stays instantaneous. That is the one case where
+  holding the connection is worth it.
+
+---
+
+### Which equalizer actually runs
+
+Many devices ship their own equalizer — more bands, tuned for that speaker, and
+set with the right headroom. The plugin defers to it when it exists, and
+attaches nothing of its own, so the two never stack.
+
+```dart
+switch (await service.equalizer.backend) {
+  case EqualizerSystem():
+    // The phone owns it — offer a button, not sliders.
+    openPanelButton(onTap: service.equalizer.openSystemPanel);
+  case EqualizerPlugin():
+    showYourSliders();            // equalizer.apply() drives them
+  case EqualizerUnavailable(:final reason):
+    hideTheSection(reason);
+}
+```
+
+**One button, whatever the device.** The backend decides what opens behind it,
+never what the listener has to choose between.
+
+Delegation is **on by default** (`preferSystemEqualizer: true`): on a real
+handset the manufacturer's panel has more bands, is tuned for that speaker, and
+escapes the headroom the standard Android effect bundle subtracts from positive
+gains. One caveat for development: answering the panel intent does not prove the
+panel works, and the Android emulator answers with an activity that opens and
+closes without setting anything. Set `preferSystemEqualizer: false` when working
+on an emulator.
+
+Where the backend is `EqualizerSystem`, the setting belongs to the phone: the
+plugin can neither read it, nor remember it, nor restore it, and `apply()` has
+no effect.
 
 ---
 

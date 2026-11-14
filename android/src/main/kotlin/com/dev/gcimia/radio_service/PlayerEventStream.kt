@@ -55,6 +55,18 @@ class PlayerEventStream : EventChannel.StreamHandler {
         }
     }
 
+    // Pause imposée de l'extérieur : casque débranché ("noisy") ou perte
+    // définitive du focus audio ("focusLoss"). Le lecteur natif est DÉJÀ en
+    // pause quand cet événement part ; il sert uniquement à ce que la couche
+    // Dart relâche sa source, comme elle le fait pour une pause explicite.
+    // L'état "paused" part par ailleurs via sendState, donc l'UI n'a rien à
+    // faire de particulier.
+    fun sendExternalPause(reason: String) {
+        runOnMain {
+            sink?.success(mapOf("type" to "externalPause", "reason" to reason))
+        }
+    }
+
     // Erreur de lecture émise comme ÉTAT (event de données), pas comme erreur
     // de canal. Ainsi elle arrive côté Dart via onData et devient un PlayerError
     // exploitable par l'UI (au lieu de partir dans onError du stream et d'être

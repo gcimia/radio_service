@@ -1,6 +1,11 @@
+<!--
+  Pas d'attribut `package` ici : depuis AGP 8 l'identité du module vient du
+  `namespace` déclaré dans android/build.gradle.kts, et le déclarer deux fois
+  est au mieux redondant. Les noms de classe relatifs (.RadioMediaService)
+  continuent de se résoudre contre ce namespace à la fusion.
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    package="com.dev.gcimia.radio_service">
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Accès réseau -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -24,6 +29,20 @@
          n'a aucun effet tant que personne ne demande, et elle évite à un hôte
          qui poste ses propres notifications d'avoir à l'ajouter. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Visibilité du paquet qui héberge le panneau d'égaliseur du
+         constructeur. Depuis Android 11 (API 30), resolveActivity et
+         queryIntentActivities ne rendent QUE les activités que l'application
+         a le droit de voir : sans cette déclaration, le panneau de Samsung,
+         Xiaomi ou autre est invisible, resolveActivity rend null, et le plugin
+         conclut à tort qu'il n'y a pas d'égaliseur constructeur — puis attache
+         le sien. L'activité existe pourtant bel et bien.
+         Ce bloc est fusionné dans le manifeste de l'application hôte. -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL" />
+        </intent>
+    </queries>
 
     <application
         android:networkSecurityConfig="@xml/network_security_config">

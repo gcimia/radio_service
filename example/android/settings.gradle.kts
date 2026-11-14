@@ -23,7 +23,7 @@ plugins {
     // AGP 9.4.0, Kotlin 2.4.20, Gradle 9.7.1 (wrapper).
     // C'est aussi d'ici que le module du plugin tire ses versions : son
     // build.gradle.kts ne déclare plus aucun classpath en propre.
-    id("com.android.application") version "9.4.0" apply false
+    id("com.android.application") version "9.5.1" apply false
     id("org.jetbrains.kotlin.android") version "2.4.20" apply false
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }

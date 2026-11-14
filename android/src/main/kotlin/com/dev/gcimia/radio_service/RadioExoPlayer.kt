@@ -1,7 +1,14 @@
 package com.dev.gcimia.radio_service
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.media.AudioManager
+import android.media.audiofx.AudioEffect
 import android.net.Uri
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -40,12 +47,20 @@ class RadioExoPlayer(                                                // ← OUVE
     context: Context,
     private val eventStream: PlayerEventStream,
     private var equalizerEnabled: Boolean = true,                    // ← configurable
+    // Déléguer au panneau du constructeur. Défaut `true` : voir RadioService.
+    private var preferSystemEqualizer: Boolean = true,
 ) {
     private val appContext        = context.applicationContext
     private val scope             = CoroutineScope(Dispatchers.Main)
     private var positionJob:      Job? = null
     private var radioEqualizer:   RadioEqualizer? = null
+    // Réglage reçu avant que le player soit prêt — consommé à STATE_READY.
     private var pendingEqualizer: PendingEq?      = null
+    // Dernier réglage demandé, qui SURVIT aux changements de station.
+    // setUrl() libère l'égaliseur (nouvelle session audio, nouvel audioSessionId) ;
+    // sans cette mémoire, le réglage était perdu à chaque changement de radio et
+    // l'hôte devait le renvoyer après chaque chargement pour qu'il tienne.
+    private var lastEqualizer:    PendingEq?      = null
 
     // MetadataExtractor — utilisé pour les flux HLS uniquement.
     // Pour les flux ICY progressifs, Dart gère les métadonnées via IcyStreamReader.
@@ -75,13 +90,255 @@ class RadioExoPlayer(                                                // ← OUVE
     // Gestion manuelle du focus audio (ExoPlayer construit avec
     // handleAudioFocus=false). Permet la pause sur audio entrant + le choix
     // reprise auto / manuelle.
+    //
+    // onPause         : interruption TRANSITOIRE (appel entrant). La source
+    //                   Dart reste en place — une reprise auto doit être
+    //                   instantanée, et une reconnexion la rendrait impossible.
+    // onPermanentLoss : perte DÉFINITIVE du focus. Traitée comme une pause
+    //                   explicite : Dart relâche la source.
     private val focusManager = RadioAudioFocusManager(
         context.applicationContext,
-        onPause  = { exoPlayer.pause() },
-        onResume = { exoPlayer.play() },
-        onDuck   = { exoPlayer.volume = currentVolume * 0.2f },
-        onUnduck = { exoPlayer.volume = currentVolume },
+        onPause         = { exoPlayer.pause() },
+        onResume        = { exoPlayer.play() },
+        onDuck          = { exoPlayer.volume = currentVolume * 0.2f },
+        onUnduck        = { exoPlayer.volume = currentVolume },
+        onPermanentLoss = { externalPause("focusLoss") },
     )
+
+    // ── Routage de l'égalisation ──────────────────────────────────────────────
+    //
+    // Beaucoup d'appareils ont déjà leur égaliseur : plus de bandes, accordé
+    // pour leur haut-parleur, et réglé avec la bonne marge. Empiler le nôtre
+    // par-dessus donne deux traitements en série, et le bundle d'effets
+    // standard d'Android retranche en prime une marge proportionnelle au gain
+    // positif demandé — d'où des renforcements qui s'entendent comme des
+    // atténuations. Quand l'appareil sait mieux faire, on lui laisse la place.
+    //
+    // La détection ne regarde PAS la marque : elle demande au système si une
+    // activité répond au panneau d'effets audio. C'est une question sur une
+    // capacité, elle vieillit bien.
+    private fun systemPanelIntent(): Intent =
+        Intent(AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL)
+            .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, exoPlayer.audioSessionId)
+            .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, appContext.packageName)
+            .putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
+
+    // queryIntentActivities plutôt que resolveActivity : quand plusieurs
+    // activités répondent, resolveActivity rend l'activité de choix du système
+    // — ou null — alors qu'on veut seulement savoir si QUELQUE CHOSE répond.
+    //
+    // Le résultat est journalisé : s'il sort vide sur un appareil qui a
+    // visiblement un égaliseur, c'est la déclaration <queries> du manifeste qui
+    // manque (voir AndroidManifest.xml), pas l'appareil qui en est dépourvu.
+    // Résultat mémorisé : il ne dépend que des paquets installés et des champs
+    // Build, qui ne bougent pas en cours de processus. Sans ça, la requête au
+    // PackageManager repartait à chaque appel d'equalizerBackend() — donc à
+    // chaque STATE_READY, c'est-à-dire à chaque changement de station — et la
+    // ligne de log se répétait, ce qui se voyait dans la sortie logcat.
+    private var systemPanelFound: Boolean? = null
+
+    private fun hasSystemPanel(): Boolean =
+        systemPanelFound ?: resolveSystemPanel().also { systemPanelFound = it }
+
+    private fun resolveSystemPanel(): Boolean = runCatching {
+        val matches = appContext.packageManager
+            .queryIntentActivities(systemPanelIntent(), 0)
+            .filter { info ->
+                val a = info.activityInfo ?: return@filter false
+                // Une activité de NOTRE propre paquet n'est pas « le panneau du
+                // téléphone » ; et une activité désactivée ne s'ouvrira pas.
+                a.packageName != appContext.packageName && a.enabled && a.exported
+            }
+
+        matches.forEach {
+            android.util.Log.d("RadioExoPlayer",
+                "panneau système — ${it.activityInfo?.packageName}" +
+                        "/${it.activityInfo?.name}")
+        }
+        if (matches.isEmpty()) {
+            android.util.Log.d("RadioExoPlayer",
+                "panneau système — aucune activité exploitable ne répond")
+        }
+
+        // ATTENTION : répondre à l'intent ne prouve pas que le panneau FONCTIONNE.
+        // Certaines images système — l'émulateur notamment — exposent une
+        // activité qui s'ouvre et se referme aussitôt sans rien régler, et rien
+        // dans l'API ne permet de le savoir à l'avance. C'est pourquoi
+        // useBuiltInEqualizer() existe : la détection est au mieux une
+        // présomption, l'hôte doit pouvoir la démentir à l'exécution.
+        matches.isNotEmpty()
+    }.getOrElse {
+        android.util.Log.w("RadioExoPlayer", "détection du panneau — ${it.message}")
+        false
+    }
+
+    /// Dément la détection : bascule DÉFINITIVEMENT sur l'égaliseur du plugin
+    /// pour cette session, et l'attache tout de suite si la lecture est en cours.
+    ///
+    /// Existe parce qu'aucune API ne dit si le panneau du constructeur fait
+    /// réellement quelque chose. Quand il s'avère inopérant, c'est la seule
+    /// porte de sortie — sinon l'utilisateur reste avec un bouton qui n'agit
+    /// sur rien et sans curseurs pour le remplacer.
+    fun useBuiltInEqualizer(result: MethodChannel.Result) {
+        preferSystemEqualizer = false
+        android.util.Log.d("RadioExoPlayer",
+            "égaliseur — bascule forcée sur le plugin (backend ${equalizerBackend()})")
+
+        if (radioEqualizer == null && equalizerBackend() == "plugin" &&
+            exoPlayer.audioSessionId != androidx.media3.common.C.AUDIO_SESSION_ID_UNSET
+        ) {
+            radioEqualizer = RadioEqualizer(exoPlayer.audioSessionId)
+            lastEqualizer?.let { eq ->
+                radioEqualizer?.apply(eq.sub, eq.bass, eq.mid, eq.high, eq.treble)
+            }
+        }
+        result.success(null)
+    }
+
+    // Environnements dont on SAIT que le panneau d'égaliseur est factice.
+    //
+    // Il n'existe aucune API officielle pour distinguer un émulateur d'un
+    // téléphone — Android Studio lui-même lit ces mêmes propriétés Build via
+    // adb. On s'en tient donc aux signaux stables et documentés, et seulement
+    // à ceux-là : ce n'est pas un contrôle de sécurité (il se contourne
+    // trivialement, et ce n'est pas le but), juste de quoi éviter un bouton
+    // mort en développement.
+    //
+    // Limite assumée : un émulateur exotique non reconnu passera au travers et
+    // retombera sur le comportement précédent. useBuiltInEqualizer() reste
+    // alors la porte de sortie.
+    private fun looksLikeEmulator(): Boolean {
+        val hardware     = Build.HARDWARE.lowercase()
+        val fingerprint  = Build.FINGERPRINT.lowercase()
+        val product      = Build.PRODUCT.lowercase()
+        val model        = Build.MODEL.lowercase()
+        val device       = Build.DEVICE.lowercase()
+
+        return hardware in setOf("goldfish", "ranchu", "vbox86", "android_x86")
+                || fingerprint.startsWith("generic")
+                || fingerprint.startsWith("unknown")
+                || fingerprint.contains("emulator")
+                || fingerprint.contains("vbox")
+                || product.contains("sdk")
+                || product.contains("emulator")
+                || product.contains("simulator")
+                || model.contains("emulator")
+                || model.contains("android sdk built for")
+                // Build.DEVICE des AVD récents : emu64xa, emu64a, emu64x…
+                || device.startsWith("emu")
+                || device.startsWith("generic")
+                || Build.MANUFACTURER.contains("Genymotion", ignoreCase = true)
+    }
+
+    // Les quatre champs sur lesquels Media3 s'identifie lui-même, dans le même
+    // ordre, plus les deux que la détection utilise en propre.
+    //
+    // Objectif : qu'un appareil passé au travers de looksLikeEmulator() se
+    // diagnostique tout seul. Le log dit exactement quelles valeurs ont été
+    // lues — il suffit de les comparer à la liste des signaux ci-dessus pour
+    // savoir lequel ajouter, sans avoir à instrumenter quoi que ce soit.
+    private fun deviceDebugInfo(): String =
+        "[${Build.DEVICE}, ${Build.MODEL}, ${Build.MANUFACTURER}, ${Build.VERSION.SDK_INT}]" +
+                " hardware=${Build.HARDWARE} product=${Build.PRODUCT}"
+
+
+    /// "system", "plugin" ou "unavailable:<raison>" — lu par Dart après configure.
+    fun equalizerBackend(): String = when {
+        !equalizerEnabled      -> "unavailable:égaliseur désactivé à la construction"
+        !preferSystemEqualizer -> "plugin"
+        // Le panneau de l'émulateur répond à l'intent mais s'ouvre et se
+        // referme sans rien régler : on ne lui délègue pas.
+        looksLikeEmulator()    -> "plugin"
+        hasSystemPanel()       -> "system"
+        else                   -> "plugin"
+    }
+
+    fun openSystemEqualizer(result: MethodChannel.Result) {
+        val intent = systemPanelIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { appContext.startActivity(intent) }
+            .onSuccess { result.success(null) }
+            .onFailure {
+                android.util.Log.w("RadioExoPlayer",
+                    "panneau système introuvable — ${it.message}")
+                result.error("NO_PANEL", it.message, null)
+            }
+    }
+
+    // Déclare notre session au système, pour que SON égaliseur s'applique à
+    // NOTRE flux et non à un réglage global. Ouvrir le panneau ne suffit pas :
+    // sans ces deux diffusions, le panneau peut éditer quelque chose qui ne
+    // nous concerne pas. À appeler en paire — ouverture à la session, fermeture
+    // à la libération, sinon le système garde une session fantôme.
+    private var sessionDeclared = false
+
+    private fun broadcastSession(open: Boolean) {
+        val action = if (open) {
+            AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION
+        } else {
+            AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION
+        }
+        if (open == sessionDeclared) return
+        runCatching {
+            appContext.sendBroadcast(
+                Intent(action)
+                    .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, exoPlayer.audioSessionId)
+                    .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, appContext.packageName)
+                    .putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC),
+            )
+            sessionDeclared = open
+            android.util.Log.d("RadioExoPlayer",
+                "session ${if (open) "déclarée" else "retirée"} auprès du système" +
+                        " (id ${exoPlayer.audioSessionId})")
+        }
+    }
+
+    // ── Casque débranché ──────────────────────────────────────────────────────
+    //
+    // ExoPlayer sait se mettre en pause seul sur ACTION_AUDIO_BECOMING_NOISY
+    // (setHandleAudioBecomingNoisy), mais il le fait SANS prévenir Dart. La
+    // couche réseau Dart gardait alors sa connexion amont ouverte pour un
+    // lecteur qui ne lit plus : elle finissait par expirer, puis se reconnectait
+    // en boucle (PlayerInterrupted) sans qu'aucun geste n'en sorte — il fallait
+    // fermer l'application. On reprend donc la main : même geste, Dart prévenu.
+    private var noisyRegistered = false
+
+    private val noisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
+                externalPause("noisy")
+            }
+        }
+    }
+
+    private fun registerNoisy() {
+        if (noisyRegistered) return
+        // ContextCompat impose le drapeau d'export, obligatoire depuis
+        // Android 14 (API 34) : un registerReceiver() sans drapeau y lève.
+        ContextCompat.registerReceiver(
+            appContext,
+            noisyReceiver,
+            IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        noisyRegistered = true
+    }
+
+    private fun unregisterNoisy() {
+        if (!noisyRegistered) return
+        runCatching { appContext.unregisterReceiver(noisyReceiver) }
+        noisyRegistered = false
+    }
+
+    // Pause venue de l'EXTÉRIEUR : casque débranché, perte définitive du focus.
+    // Même effet qu'une pause utilisateur côté natif, plus un événement pour que
+    // Dart relâche la source comme le ferait PlayerController.pause().
+    private fun externalPause(reason: String) {
+        android.util.Log.d("RadioExoPlayer", "externalPause — $reason")
+        unregisterNoisy()
+        exoPlayer.pause()
+        focusManager.abandon()
+        eventStream.sendExternalPause(reason)
+    }
 
     init {                                                           // ← OUVERTURE init
         attachListener()
@@ -107,10 +364,21 @@ class RadioExoPlayer(                                                // ← OUVE
                     eventStream.sendState(mapped)
                 }
 
+                // L'effet n'est instancié QUE si l'égalisation nous revient.
+                // Le créer alors qu'on délègue au panneau du constructeur
+                // remettrait deux égaliseurs en série — exactement ce que le
+                // routage sert à éviter.
+                // La session audio n'a d'identifiant valide qu'une fois le
+                // rendu audio initialisé — donc ici, et pas au configure.
+                // C'est aussi pour ça que l'égaliseur est créé à cet endroit.
+                if (state == Player.STATE_READY) broadcastSession(open = true)
+
                 if (state == Player.STATE_READY && radioEqualizer == null) {
-                    if (equalizerEnabled) {
+                    if (equalizerBackend() == "plugin") {
                         radioEqualizer = RadioEqualizer(exoPlayer.audioSessionId)
-                        pendingEqualizer?.let { eq ->
+                        // En attente d'abord, à défaut le dernier réglage connu :
+                        // c'est ce qui fait tenir l'égaliseur d'une station à l'autre.
+                        (pendingEqualizer ?: lastEqualizer)?.let { eq ->
                             radioEqualizer?.apply(eq.sub, eq.bass, eq.mid, eq.high, eq.treble)
                             pendingEqualizer = null
                         }
@@ -173,13 +441,32 @@ class RadioExoPlayer(                                                // ← OUVE
 
     /// Appelée une seule fois depuis RadioPlayerHandler après l'initialisation.
     /// Permet d'activer/désactiver les fonctionnalités optionnelles.
-    fun configure(equalizerEnabled: Boolean, autoResume: Boolean = true) { // ← OUVERTURE configure
-        this.equalizerEnabled = equalizerEnabled
-        focusManager.autoResume = autoResume
+    fun configure(                                                   // ← OUVERTURE configure
+        equalizerEnabled: Boolean,
+        autoResume: Boolean = true,
+        preferSystemEqualizer: Boolean = true,
+    ) {
+        this.equalizerEnabled       = equalizerEnabled
+        this.preferSystemEqualizer  = preferSystemEqualizer
+        focusManager.autoResume     = autoResume
+
+        // Décidé ici, une fois : c'est le moment où l'on sait ce que l'hôte
+        // veut ET ce que l'appareil propose.
+        // La détection du panneau ne dépend pas de la session : resolveActivity
+        // ne regarde que l'action de l'intent. On peut donc décider ici.
+        android.util.Log.d("RadioExoPlayer", "appareil — ${deviceDebugInfo()}")
+        if (looksLikeEmulator()) {
+            android.util.Log.d("RadioExoPlayer",
+                "environnement d'émulation détecté — pas de délégation au panneau système")
+        }
+        android.util.Log.d("RadioExoPlayer", "égaliseur — backend ${equalizerBackend()}")
         if (!equalizerEnabled) {
+            // Fonctionnalité coupée : on libère la ressource DSP et on oublie
+            // le réglage — le rallumer plus tard doit repartir de plat.
             radioEqualizer?.release()
             radioEqualizer   = null
             pendingEqualizer = null
+            lastEqualizer    = null
         }
     }                                                        // ← FERMETURE configure
 
@@ -199,6 +486,9 @@ class RadioExoPlayer(                                                // ← OUVE
 
         stopPositionUpdates()
 
+        // L'égaliseur est lié à l'audioSessionId, qui change avec le flux :
+        // on le libère. `lastEqualizer` n'est volontairement PAS effacé — il
+        // sera réappliqué à STATE_READY sur la nouvelle session.
         radioEqualizer?.release()
         radioEqualizer   = null
         pendingEqualizer = null
@@ -259,12 +549,14 @@ class RadioExoPlayer(                                                // ← OUVE
         // aux interruptions). On lance la lecture même si refusé (intention
         // utilisateur explicite) — le refus reste rarissime.
         focusManager.request()
+        registerNoisy()
         exoPlayer.play()
         result.success(null)
     }                                                                // ← FERMETURE play
 
     fun pause(result: MethodChannel.Result) {                        // ← OUVERTURE pause
         // Pause demandée par l'utilisateur → on relâche le focus.
+        unregisterNoisy()
         exoPlayer.pause()
         focusManager.abandon()
         result.success(null)
@@ -272,6 +564,7 @@ class RadioExoPlayer(                                                // ← OUVE
 
     fun stop(result: MethodChannel.Result) {                         // ← OUVERTURE stop
         stopPositionUpdates()
+        unregisterNoisy()
         exoPlayer.stop()
         focusManager.abandon()
         result.success(null)
@@ -341,10 +634,12 @@ class RadioExoPlayer(                                                // ← OUVE
         treble: Double,
         result: MethodChannel.Result,
     ) {
+        val eq = PendingEq(sub, bass, mid, high, treble)
+        lastEqualizer = eq
         if (radioEqualizer != null) {
             radioEqualizer?.apply(sub, bass, mid, high, treble)
         } else {
-            pendingEqualizer = PendingEq(sub, bass, mid, high, treble)
+            pendingEqualizer = eq
         }
         result.success(null)
     }                                                                // ← FERMETURE setEqualizer
@@ -352,6 +647,7 @@ class RadioExoPlayer(                                                // ← OUVE
     fun resetEqualizer(result: MethodChannel.Result) {               // ← OUVERTURE resetEqualizer
         radioEqualizer?.reset()
         pendingEqualizer = null
+        lastEqualizer    = null
         result.success(null)
     }                                                                // ← FERMETURE resetEqualizer
 
@@ -363,10 +659,13 @@ class RadioExoPlayer(                                                // ← OUVE
         if (released) return
         released = true
         stopPositionUpdates()
+        unregisterNoisy()
+        broadcastSession(open = false)
         focusManager.abandon()
         radioEqualizer?.release()
         radioEqualizer   = null
         pendingEqualizer = null
+        lastEqualizer    = null
         exoPlayer.release()
     }                                                                // ← FERMETURE release
 
@@ -430,10 +729,10 @@ class RadioExoPlayer(                                                // ← OUVE
                     .build(),
                 /* handleAudioFocus = */ false,
             )
-            // Becoming noisy — pause automatique quand :
-            //   - le casque filaire est débranché
-            //   - la connexion Bluetooth audio se coupe
-            .setHandleAudioBecomingNoisy(true)
+            // Becoming noisy — géré MANUELLEMENT (voir noisyReceiver) :
+            // ExoPlayer sait le faire seul, mais il met en pause sans prévenir
+            // Dart, qui laissait alors sa source ouverte pour rien.
+            .setHandleAudioBecomingNoisy(false)
             .build()
     }                                                                // ← FERMETURE buildPlayer
 

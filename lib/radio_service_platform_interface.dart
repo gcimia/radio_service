@@ -3,11 +3,13 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'radio_service_method_channel.dart';
 import 'src/buffer/buffer_config.dart';
+import 'src/equalizer/equalizer_backend.dart';
 import 'src/equalizer/equalizer_config.dart';
 import 'src/player/player_position.dart';
 import 'src/player/player_state.dart';
 
 export 'src/buffer/buffer_config.dart';
+export 'src/equalizer/equalizer_backend.dart';
 export 'src/equalizer/equalizer_config.dart';
 export 'src/metadata/player_metadata.dart';
 export 'src/metadata/metadata_mapping.dart';
@@ -41,6 +43,7 @@ abstract class RadioServicePlatform extends PlatformInterface {
     bool equalizerEnabled  = true,
     bool backgroundEnabled = true,
     bool autoResumeAfterFocusLoss = true,
+    bool preferSystemEqualizer = true,
   }) => throw UnimplementedError('configure() not implemented.');
 
   /// Reçoit l'URL du proxy local Dart (http://127.0.0.1:PORT/stream).
@@ -104,6 +107,23 @@ abstract class RadioServicePlatform extends PlatformInterface {
   Future<void> setEqualizer(EqualizerConfig config) =>
       throw UnimplementedError('setEqualizer() not implemented.');
 
+  /// Qui pilote l'égalisation sur cet appareil — voir [EqualizerBackend].
+  /// Décidé au moment du [configure], donc à n'interroger qu'après.
+  ///
+  /// Défaut NON levant : une plateforme sans égaliseur répond simplement
+  /// qu'il n'y en a pas, et la souche web n'a pas à suivre cet ajout.
+  Future<EqualizerBackend> getEqualizerBackend() async =>
+      EqualizerUnavailable('plateforme sans égaliseur');
+
+  /// Ouvre le panneau d'égaliseur du constructeur pour NOTRE session audio.
+  /// Sans effet si le backend n'est pas [EqualizerSystem].
+  Future<void> openSystemEqualizer() async {}
+
+  /// Dément la détection et bascule sur l'égaliseur du plugin.
+  /// Voir [EqualizerSystem] — répondre à l'intent ne prouve pas que le
+  /// panneau du constructeur fasse quoi que ce soit.
+  Future<void> useBuiltInEqualizer() async {}
+
   // ── Background service ────────────────────────────────────────────────────
 
   Future<bool> isBackgroundServiceRunning() =>
@@ -118,6 +138,18 @@ abstract class RadioServicePlatform extends PlatformInterface {
   /// Position dans le buffer (time-shift).
   Stream<PlayerPosition> get positionStream =>
       throw UnimplementedError('positionStream not implemented.');
+
+  /// Pauses imposées de l'extérieur — casque débranché, perte définitive du
+  /// focus audio. Émet la raison (`noisy`, `focusLoss`).
+  ///
+  /// Le lecteur natif est déjà en pause quand l'événement arrive : ce flux
+  /// existe pour que [RadioService] relâche sa source, exactement comme pour
+  /// une pause explicite. Ne pas rappeler [pause] en réaction.
+  ///
+  /// Implémentation par défaut VIDE plutôt que `UnimplementedError` : une
+  /// plateforme sans cette notion n'a rien à déclarer, et la souche web n'a
+  /// pas à suivre chaque ajout d'événement.
+  Stream<String> get externalPauseStream => const Stream<String>.empty();
 
   // metadataStream intentionnellement absent —
   // les métadonnées sont gérées par IcyStreamReader côté Dart.

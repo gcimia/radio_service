@@ -32,7 +32,12 @@ class RadioPlayerHandler(                                            // ← OUVE
                 val equalizerEnabled  = call.argument<Boolean>("equalizerEnabled")  ?: true
                 val backgroundEnabled = call.argument<Boolean>("backgroundEnabled") ?: true
                 val autoResume        = call.argument<Boolean>("autoResumeAfterFocusLoss") ?: true
-                player.configure(equalizerEnabled = equalizerEnabled, autoResume = autoResume)
+                val preferSystemEq    = call.argument<Boolean>("preferSystemEqualizer") ?: true
+                player.configure(
+                    equalizerEnabled      = equalizerEnabled,
+                    autoResume            = autoResume,
+                    preferSystemEqualizer = preferSystemEq,
+                )
                 onConfigure(backgroundEnabled)
                 result.success(null)
             }
@@ -51,6 +56,23 @@ class RadioPlayerHandler(                                            // ← OUVE
                 }
                 player.setUrl(url, stationName, isHls, result)
             }
+
+            // Qui pilote l'égalisation sur cet appareil. Rendu sous forme de
+            // map plutôt que de chaîne nue : la branche "unavailable" porte
+            // une raison, que Dart remonte dans EqualizerUnavailable.
+            "getEqualizerBackend" -> {
+                val raw = player.equalizerBackend()
+                val map = if (raw.startsWith("unavailable:")) {
+                    mapOf("backend" to "unavailable",
+                          "reason"  to raw.removePrefix("unavailable:"))
+                } else {
+                    mapOf("backend" to raw)
+                }
+                result.success(map)
+            }
+
+            "openSystemEqualizer" -> player.openSystemEqualizer(result)
+            "useBuiltInEqualizer" -> player.useBuiltInEqualizer(result)
 
             "play"       -> player.play(result)
             "pause"      -> player.pause(result)

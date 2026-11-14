@@ -21,6 +21,7 @@ import 'src/stream/icy_stream_reader.dart';
 // Re-exports — l'app n'importe que radio_service.dart
 export 'radio_service_platform_interface.dart';
 export 'src/artwork/artwork_resolver_config.dart';
+export 'src/equalizer/equalizer_backend.dart';
 export 'src/equalizer/equalizer_config.dart';
 export 'src/metadata/metadata_mapping.dart';
 export 'src/metadata/player_metadata.dart';
@@ -134,6 +135,12 @@ class RadioService {
   final _stateController = StreamController<PlayerState>.broadcast();
   StreamSubscription<PlayerState>? _nativeStateSub;
 
+  // Pauses imposées par le système (casque débranché, perte définitive du
+  // focus). Le natif les déclenche sans passer par PlayerController : sans
+  // cet abonnement, la couche réseau Dart restait ouverte pour un lecteur à
+  // l'arrêt, finissait par expirer, et tournait en reconnexion sans issue.
+  StreamSubscription<String>? _externalPauseSub;
+
   // Watchdog « premier octet audio » — si aucun octet audio n'arrive après le
   // démarrage d'un flux ICY (serveur muet, lent, refus…), le flux est déclaré
   // interrompu au lieu de laisser le loader tourner à l'infini. Avis pour
@@ -156,6 +163,24 @@ class RadioService {
     bool                  equalizerEnabled  = true,
     bool                  backgroundEnabled = true,
     bool                  autoResumeAfterFocusLoss = true,
+    // Déléguer au panneau d'égaliseur du constructeur quand l'appareil en
+    // expose un. DÉFAUT `true` — c'est une décision d'hôte, prise une fois à
+    // la construction, jamais un choix laissé à la personne qui écoute.
+    //
+    // Pourquoi déléguer par défaut : sur un vrai téléphone, le panneau du
+    // constructeur a plus de bandes, il est accordé pour ce haut-parleur, et
+    // il n'est pas soumis à la marge que le bundle d'effets standard
+    // d'Android retranche sur les gains positifs. Il fait simplement mieux.
+    //
+    // Répondre à l'intent ne prouve pas que le panneau FASSE quelque chose, et
+    // aucune API ne le dit à l'avance. Les environnements d'émulation, dont le
+    // panneau s'ouvre et se referme sans rien régler, sont écartés par le
+    // plugin lui-même : pas besoin de changer ce paramètre pour développer.
+    //
+    // Mettre `false` pour imposer l'égaliseur du plugin — pour un hôte qui
+    // tient à une interface identique partout, ou si un appareil réel s'avère
+    // exposer un panneau inerte (voir aussi `equalizer.useBuiltIn()`).
+    bool                  preferSystemEqualizer = true,
   })  : equalizer    = EqualizerService(),
         notification = NotificationService(),
         background   = BackgroundService() {
@@ -183,10 +208,22 @@ class RadioService {
         equalizerEnabled:  equalizerEnabled,
         backgroundEnabled: backgroundEnabled,
         autoResumeAfterFocusLoss: autoResumeAfterFocusLoss,
+        preferSystemEqualizer:    preferSystemEqualizer,
       ).catchError((Object e) {
         debugPrint('[RadioService] configure() a échoué : $e');
       }),
     );
+
+    // Une pause imposée par le système suit exactement le même chemin qu'une
+    // pause explicite — sauf qu'on ne redemande pas la pause au natif : il
+    // l'a déjà faite. Le `play()` suivant rechargera la station.
+    _externalPauseSub =
+        RadioServicePlatform.instance.externalPauseStream.listen((reason) {
+      // ── DEBUG ──────────────────────────────────────────────────────────
+      debugPrint('[RadioService] pause imposée par le système ($reason)');
+      // ── FIN DEBUG ──────────────────────────────────────────────────────
+      unawaited(_releaseForPause());
+    });
 
     // Redirige les états natifs (ExoPlayer) vers le flux unifié.
     _nativeStateSub = player.stateStream.listen(
@@ -842,6 +879,8 @@ class RadioService {
     await _stopStream();
     await _nativeStateSub?.cancel();
     _nativeStateSub = null;
+    await _externalPauseSub?.cancel();
+    _externalPauseSub = null;
     // Libère les ressources natives (player, MediaSession, service, notification).
     await RadioServicePlatform.instance.release();
     await _metadataController.close();

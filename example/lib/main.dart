@@ -27,6 +27,13 @@ typedef _Stream = ({String url, String? metadataUrl, MetadataMapping? mapping});
 
 class _RadioTestPageState extends State<RadioTestPage> {
   final _service = RadioService(
+    // Déléguer au panneau d'égaliseur du constructeur quand il existe — c'est
+    // le défaut, et c'est ce qui convient sur un vrai téléphone : plus de
+    // bandes, accordé pour le haut-parleur, pas de marge retranchée sur les
+    // gains positifs. Le plugin écarte lui-même les environnements d'émulation,
+    // dont le panneau répond à l'intent sans rien régler.
+    // `false` impose les curseurs du plugin partout.
+    preferSystemEqualizer: true,
     artworkConfig: ArtworkResolverConfig(
       enabled:           true,
       priority:          [ArtworkSourceItunes(), ArtworkSourceDeezer()],
@@ -168,6 +175,10 @@ class _RadioTestPageState extends State<RadioTestPage> {
   PlayerPosition  _position       = LivePosition();
   EqualizerConfig _equalizerConfig = const EqualizerConfig.flat();
 
+  // Qui pilote l'égalisation sur CET appareil. Résolu une fois au démarrage.
+  // null = pas encore su.
+  EqualizerBackend? _eqBackend;
+
   bool    _isDragging = false;
   double  _dragValue  = 0.0;
 
@@ -176,6 +187,12 @@ class _RadioTestPageState extends State<RadioTestPage> {
     super.initState();
     // Aucune permission à demander : la notification du lecteur passe par une
     // MediaSession, et Android exempte ces notifications de POST_NOTIFICATIONS.
+    // Routage de l'égaliseur : sur un appareil qui a son propre panneau, le
+    // plugin lui laisse la main et nos curseurs n'auraient aucun effet.
+    _service.equalizer.backend.then((b) {
+      if (mounted) setState(() => _eqBackend = b);
+    });
+
     _service.stateStream.listen((s) => setState(() => _state = s));
     _service.metadataStream.listen((m) {
       // Stream silencieux — le flux est connecté mais la radio ne diffuse rien.
@@ -404,7 +421,66 @@ class _RadioTestPageState extends State<RadioTestPage> {
     ],
   );
 
-  Widget _buildEqualizer() => Column(
+  // ── Égaliseur ─────────────────────────────────────────────────────────────
+  //
+  // UN SEUL bouton, quel que soit l'appareil. Ce qu'il y a derrière — curseurs
+  // du plugin ou panneau du constructeur — ne regarde pas la personne qui
+  // appuie. On ne lui demande jamais de choisir entre deux commandes parce que
+  // le code hésite : l'incertitude du plugin ne doit pas remonter à l'écran.
+  //
+  // Le switch reste exhaustif sur la classe scellée : le jour où un backend
+  // s'ajoute, ce code cesse de compiler — et c'est là qu'on veut l'apprendre.
+  Widget _buildEqualizer() {
+    // Rien à proposer : pas de bouton du tout, plutôt qu'un bouton grisé
+    // accompagné d'une explication.
+    final backend = _eqBackend;
+    if (backend == null || backend is EqualizerUnavailable) {
+      return const SizedBox.shrink();
+    }
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ElevatedButton.icon(
+        onPressed: () => switch (backend) {
+          EqualizerSystem()      => _service.equalizer.openSystemPanel(),
+          EqualizerPlugin()      => _openPluginEqualizer(),
+          EqualizerUnavailable() => null,   // écarté plus haut
+        },
+        icon:  const Icon(Icons.tune, size: 18),
+        label: const Text('Égaliseur'),
+      ),
+    );
+  }
+
+  // Les curseurs du plugin, dans une feuille. Le bouton y mène directement :
+  // aucune étape intermédiaire, aucun texte à lire avant d'agir.
+  void _openPluginEqualizer() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => StatefulBuilder(
+        // La feuille a son propre cycle de redessin : sans ça, bouger un
+        // curseur mettrait à jour la page du dessous, pas la feuille.
+        builder: (_, setSheetState) {
+          // Mémorisé le temps de la feuille : _applyEqualizer redessine alors
+          // la page ET la feuille, sans que les curseurs aient à connaître
+          // laquelle des deux les affiche.
+          _sheetSetState = setSheetState;
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+              child: _buildPluginEqualizer(),
+            ),
+          );
+        },
+      ),
+    ).whenComplete(() => _sheetSetState = null);
+  }
+
+  // setState de la feuille d'égaliseur, non nul tant qu'elle est ouverte.
+  void Function(VoidCallback)? _sheetSetState;
+
+  Widget _buildPluginEqualizer() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       const Padding(
@@ -491,6 +567,7 @@ class _RadioTestPageState extends State<RadioTestPage> {
 
   void _applyEqualizer(EqualizerConfig config) {
     setState(() => _equalizerConfig = config);
+    _sheetSetState?.call(() {});
     _service.equalizer.apply(config);
   }
 }

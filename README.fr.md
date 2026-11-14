@@ -23,7 +23,7 @@ Développé pour Android (iOS prévu). Gère les flux ICY, SHOUTcast, AAC, MP3 e
 
 ```yaml
 dependencies:
-  radio_service: ^0.1.7
+  radio_service: ^0.1.9
 ```
 
 ---
@@ -169,7 +169,12 @@ résolues en URLs absolues en utilisant le domaine de l'endpoint de métadonnée
 // Appliquer un préréglage
 service.equalizer.apply(const EqualizerConfig.bassBoost());
 
-// Réglage personnalisé (dB, plage : -15 à +15)
+// Réglage personnalisé (dB, plage : -15 à +15).
+// Ces cinq gains sont des fréquences nominales, pas des indices de bande
+// matérielle : le plugin les interpole (en échelle logarithmique) sur les
+// fréquences centrales que l'égaliseur de l'appareil expose réellement —
+// 3, 5, 8 ou 10 bandes. Un réglage survit à un changement de station ;
+// l'hôte n'a pas à le renvoyer.
 service.equalizer.apply(EqualizerConfig(
   sub:    3.0,
   bass:   2.0,
@@ -224,11 +229,48 @@ Conséquences pour l'hôte :
 - Rien n'est consommé sur le réseau pendant une pause.
 - HLS n'est pas concerné : ExoPlayer y détient la connexion, la pause reste une
   pause native pure.
-- **Seule une pause explicite relâche la source.** Une pause provoquée par le
-  focus audio (appel entrant, casque débranché) est déclenchée nativement et ne
-  relâche rien — volontairement, pour qu'une interruption courte reprenne
-  instantanément. Une interruption longue laisse donc encore la source en
-  plan ; à traiter côté hôte en rappelant `setUrl()` à la reprise.
+- **Une pause imposée par le système relâche aussi la source**, depuis la
+  0.1.8 : casque débranché, ou perte définitive du focus audio (une autre
+  appli média a pris la main). Rien n'est demandé à l'hôte — le `play()`
+  suivant recharge la station exactement comme après une pause explicite.
+- **Une interruption transitoire, non** — un appel entrant garde la source
+  prête pour que la reprise automatique reste instantanée. C'est le seul cas
+  où conserver la connexion en vaut la peine.
+
+---
+
+### Quel égaliseur tourne réellement
+
+Beaucoup d'appareils ont leur propre égaliseur — plus de bandes, accordé pour
+leur haut-parleur, réglé avec la bonne marge. Le plugin lui laisse la main
+quand il existe, et n'attache rien de son côté : les deux ne s'empilent jamais.
+
+```dart
+switch (await service.equalizer.backend) {
+  case EqualizerSystem():
+    // Le téléphone en est propriétaire — un bouton, pas des curseurs.
+    boutonOuvrirPanneau(onTap: service.equalizer.openSystemPanel);
+  case EqualizerPlugin():
+    afficherVosCurseurs();        // equalizer.apply() les pilote
+  case EqualizerUnavailable(:final reason):
+    masquerLaSection(reason);
+}
+```
+
+**Un seul bouton, quel que soit l'appareil.** Le backend décide de ce qui
+s'ouvre derrière, jamais de ce que la personne doit choisir.
+
+La délégation est **active par défaut** (`preferSystemEqualizer: true`) : sur un
+vrai téléphone, le panneau du constructeur a plus de bandes, il est accordé pour
+ce haut-parleur, et il échappe à la marge que le bundle d'effets standard
+d'Android retranche sur les gains positifs. Une réserve, pour le développement :
+répondre à l'intent du panneau ne prouve pas qu'il fonctionne, et l'émulateur
+Android y répond par une activité qui s'ouvre et se referme sans rien régler.
+Mettre `preferSystemEqualizer: false` quand on travaille sur émulateur.
+
+Quand le backend est `EqualizerSystem`, le réglage appartient au téléphone : le
+plugin ne peut ni le lire, ni le mémoriser, ni le restaurer, et `apply()` est
+sans effet.
 
 ---
 

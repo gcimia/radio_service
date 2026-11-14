@@ -44,6 +44,10 @@ class RadioServiceWeb extends RadioServicePlatform {
     // Sans effet sur web : le navigateur gère lui-même les interruptions
     // audio (il n'y a ni téléphonie ni focus audio système comme sur Android).
     bool autoResumeAfterFocusLoss = true,
+    // Sans effet sur web : aucun panneau d'égaliseur constructeur à déléguer.
+    // Le paramètre doit tout de même figurer ici — un override Dart doit
+    // déclarer tous les paramètres nommés de la méthode qu'il redéfinit.
+    bool preferSystemEqualizer = true,
   }) async {
     _setupMediaSession();
   }
